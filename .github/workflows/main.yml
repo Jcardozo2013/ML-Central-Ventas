@@ -1,0 +1,82 @@
+name: Compilar APK ML Central Ventas
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Generar canal privado
+        shell: bash
+        run: |
+          TOPIC="mlcentral-ventas-$(openssl rand -hex 20)"
+          echo "$TOPIC" > mlcentral_topic.txt
+          sed -i "s/__MLC_TOPIC__/$TOPIC/g" app/src/main/java/com/mlcentral/ventas/AppConfig.java
+
+      - name: Crear sonido de venta
+        shell: bash
+        run: |
+          mkdir -p app/src/main/res/raw
+          python3 - <<'PY'
+          import wave
+          import math
+          import struct
+
+          rate = 44100
+          duration = 0.65
+
+          with wave.open("app/src/main/res/raw/sale_chime.wav", "w") as f:
+              f.setnchannels(1)
+              f.setsampwidth(2)
+              f.setframerate(rate)
+
+              data = []
+              for i in range(int(rate * duration)):
+                  t = i / rate
+                  freq = 880 if t < 0.22 else 1320
+                  envelope = max(0.0, 1.0 - t / duration)
+                  sample = int(
+                      15000 *
+                      math.sin(2 * math.pi * freq * t) *
+                      envelope
+                  )
+                  data.append(struct.pack("<h", sample))
+
+              f.writeframes(b"".join(data))
+          PY
+
+      - name: Compilar APK
+        run: gradle assembleDebug --stacktrace
+
+      - name: Preparar APK
+        shell: bash
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas.apk
+
+      - name: Guardar APK y configuración
+        uses: actions/upload-artifact@v4
+        with:
+          name: ML-Central-Ventas-APK
+          path: |
+            ML-Central-Ventas.apk
+            mlcentral_topic.txt
+          retention-days: 7
