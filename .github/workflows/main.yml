@@ -25,6 +25,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Mantener firma Android entre versiones
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: mlcentral-ventas-debug-keystore-v1
+
       - name: Recuperar canal privado existente
         shell: bash
         env:
