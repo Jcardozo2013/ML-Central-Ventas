@@ -26,6 +26,7 @@ public class SaleListenerService extends Service {
     public static final String SALES_CHANNEL = "mlc_sales_urgent";
     private volatile boolean running = false;
     private Thread worker;
+    private Thread syncWorker;
     private PowerManager.WakeLock wakeLock;
 
     @Override public void onCreate() {
@@ -46,6 +47,9 @@ public class SaleListenerService extends Service {
             worker = new Thread(this::listenLoop, "MLCentralVentasListener");
             worker.setDaemon(true);
             worker.start();
+            syncWorker = new Thread(this::listenReadSyncLoop, "MLCentralReadSyncListener");
+            syncWorker.setDaemon(true);
+            syncWorker.start();
         }
         return START_STICKY;
     }
@@ -100,17 +104,57 @@ public class SaleListenerService extends Service {
         }
     }
 
-    private void handleMessage(JSONObject o) {
-        if (ReadSync.isReadSync(o)) {
-            List<String> ids = ReadSync.idsFromMessage(o);
-            if (!ids.isEmpty()) {
-                SaleStore.markRead(this, ids);
-                cancelSaleNotifications(ids);
-                sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
-            }
-            return;
-        }
+    private void listenReadSyncLoop() {
+        int backoff = 2;
+        while (running) {
+            HttpURLConnection conn = null;
+            try {
+                String last = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).getString("last_read_sync_id", "");
+                String url = ReadSync.streamUrl();
+                if (last != null && !last.isEmpty()) {
+                    url += "?since=" + URLEncoder.encode(last, StandardCharsets.UTF_8.name());
+                }
+                conn = (HttpURLConnection) new java.net.URL(url).openConnection();
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(0);
+                conn.setRequestProperty("Accept", "application/x-ndjson");
+                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.2 Android");
+                int code = conn.getResponseCode();
+                if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
+                backoff = 2;
 
+                BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                String line;
+                while (running && (line = br.readLine()) != null) {
+                    if (line.trim().isEmpty()) continue;
+                    JSONObject o;
+                    try { o = new JSONObject(line); }
+                    catch (Exception ignored) { continue; }
+                    String event = o.optString("event", "");
+                    String ntfyId = o.optString("id", "");
+                    if ("message".equals(event) && ReadSync.isReadSync(o)) handleReadSync(o);
+                    if ("message".equals(event) && !ntfyId.isEmpty()) {
+                        getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit().putString("last_read_sync_id", ntfyId).apply();
+                    }
+                }
+            } catch (Exception e) {
+                try { Thread.sleep(backoff * 1000L); } catch (InterruptedException ignored) {}
+                backoff = Math.min(30, backoff * 2);
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+    }
+
+    private void handleReadSync(JSONObject o) {
+        List<String> ids = ReadSync.idsFromMessage(o);
+        if (ids.isEmpty()) return;
+        SaleStore.markRead(this, ids);
+        cancelSaleNotifications(ids);
+        sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+    }
+
+    private void handleMessage(JSONObject o) {
         String saleId = o.optString("sequence_id", "").trim();
         if (saleId.isEmpty()) saleId = o.optString("id", "").trim();
         if (saleId.isEmpty()) return;
@@ -213,6 +257,7 @@ public class SaleListenerService extends Service {
         running = false;
         SaleStore.setConnected(this, false);
         if (worker != null) worker.interrupt();
+        if (syncWorker != null) syncWorker.interrupt();
         try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
         super.onDestroy();
     }
