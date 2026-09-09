@@ -19,6 +19,9 @@ public final class ReadSync {
 
     private ReadSync() {}
 
+    public static String topic() { return AppConfig.TOPIC + "-readsync"; }
+    public static String streamUrl() { return AppConfig.BASE_URL + topic() + "/json"; }
+
     public static void acknowledgeAsync(Context context, Collection<String> ids) {
         Context app = context.getApplicationContext();
         SaleStore.queueReadSync(app, ids);
@@ -39,7 +42,7 @@ public final class ReadSync {
             } finally {
                 sending = false;
             }
-        }, "MLCentralReadSync");
+        }, "MLCentralReadSyncSender");
         t.setDaemon(true);
         t.start();
     }
@@ -57,7 +60,7 @@ public final class ReadSync {
             body.put("at", System.currentTimeMillis() / 1000L);
             byte[] data = body.toString().getBytes(StandardCharsets.UTF_8);
 
-            URL url = new URL(AppConfig.BASE_URL + AppConfig.TOPIC);
+            URL url = new URL(AppConfig.BASE_URL + topic());
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(12000);
