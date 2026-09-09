@@ -19,6 +19,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class SaleListenerService extends Service {
     public static final String SERVICE_CHANNEL = "mlc_service";
@@ -63,10 +64,11 @@ public class SaleListenerService extends Service {
                 conn.setConnectTimeout(15000);
                 conn.setReadTimeout(0);
                 conn.setRequestProperty("Accept", "application/x-ndjson");
-                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.0 Android");
+                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.2 Android");
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
                 SaleStore.setConnected(this, true);
+                ReadSync.flushPendingAsync(this);
                 updateServiceNotification("Conectado · esperando ventas");
                 backoff = 2;
 
@@ -84,9 +86,6 @@ public class SaleListenerService extends Service {
                         continue;
                     }
                     if (!"message".equals(event)) continue;
-                    // Primero procesamos y recién después avanzamos el cursor.
-                    // Así, si Android mata el proceso en este punto, al reconectar
-                    // puede repetir la lectura pero nunca perder la venta.
                     handleMessage(o);
                     if (!ntfyId.isEmpty()) SaleStore.setLastMessageId(this, ntfyId);
                 }
@@ -102,6 +101,16 @@ public class SaleListenerService extends Service {
     }
 
     private void handleMessage(JSONObject o) {
+        if (ReadSync.isReadSync(o)) {
+            List<String> ids = ReadSync.idsFromMessage(o);
+            if (!ids.isEmpty()) {
+                SaleStore.markRead(this, ids);
+                cancelSaleNotifications(ids);
+                sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+            }
+            return;
+        }
+
         String saleId = o.optString("sequence_id", "").trim();
         if (saleId.isEmpty()) saleId = o.optString("id", "").trim();
         if (saleId.isEmpty()) return;
@@ -110,11 +119,20 @@ public class SaleListenerService extends Service {
         String title = o.optString("title", "🛒 NUEVA VENTA — ML CENTRAL");
         String message = o.optString("message", "Venta nueva");
         long when = o.optLong("time", System.currentTimeMillis() / 1000L);
+        boolean alreadyConfirmed = SaleStore.isAcknowledged(this, saleId);
 
         SaleStore.markSeen(this, saleId);
         SaleStore.addHistory(this, saleId, title, message, when);
-        showSaleNotification(saleId, title, message);
+        if (!alreadyConfirmed) showSaleNotification(saleId, title, message);
         sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+    }
+
+    private void cancelSaleNotifications(List<String> ids) {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        for (String id : ids) {
+            if (id == null || id.isEmpty()) continue;
+            nm.cancel(1000 + Math.abs(id.hashCode() % 900000));
+        }
     }
 
     private void createChannels() {
