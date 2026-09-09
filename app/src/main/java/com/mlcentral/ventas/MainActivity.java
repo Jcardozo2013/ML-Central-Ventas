@@ -13,8 +13,7 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.view.Gravity;
-import android.view.View;
+import android.provider.Settings;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -26,7 +25,7 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     private TextView status;
-    private TextView unread;
+    private Button unread;
     private TextView history;
     private final Handler handler = new Handler();
 
@@ -70,38 +69,55 @@ public class MainActivity extends Activity {
         status.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(status);
 
-        unread = text("0 ventas nuevas", 23, Color.rgb(27, 94, 32));
-        unread.setTypeface(null, android.graphics.Typeface.BOLD);
-        unread.setPadding(0, dp(14), 0, dp(14));
-        root.addView(unread);
+        unread = new Button(this);
+        unread.setText("0 ventas nuevas");
+        unread.setTextSize(20);
+        unread.setAllCaps(false);
+        unread.setOnClickListener(v -> {
+            if (SaleStore.unread(this) > 0) startActivity(new Intent(this, UnreadSalesActivity.class));
+        });
+        LinearLayout.LayoutParams up = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        up.setMargins(0, dp(12), 0, dp(10));
+        root.addView(unread, up);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        root.addView(actions);
-
-        Button read = new Button(this);
-        read.setText("Marcar vistas");
-        read.setOnClickListener(v -> { SaleStore.markAllRead(this); refresh(); });
-        actions.addView(read, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView hint = text("Tocá arriba para ver solamente las ventas que todavía no confirmaste.", 13, Color.GRAY);
+        hint.setPadding(0, 0, 0, dp(12));
+        root.addView(hint);
 
         Button restart = new Button(this);
         restart.setText("Reconectar");
-        restart.setOnClickListener(v -> { stopService(new Intent(this, SaleListenerService.class)); handler.postDelayed(this::startListener, 700); });
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        rp.setMargins(dp(8), 0, 0, 0);
-        actions.addView(restart, rp);
+        restart.setOnClickListener(v -> {
+            stopService(new Intent(this, SaleListenerService.class));
+            handler.postDelayed(this::startListener, 700);
+        });
+        root.addView(restart, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         Button test = new Button(this);
         test.setText("Probar aviso y sonido");
         test.setOnClickListener(v -> showLocalTest());
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        tp.setMargins(0, dp(10), 0, dp(14));
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        tp.setMargins(0, dp(10), 0, 0);
         root.addView(test, tp);
+
+        Button tone = new Button(this);
+        tone.setText("Elegir tono de notificación");
+        tone.setOnClickListener(v -> openToneSettings());
+        LinearLayout.LayoutParams tonep = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        tonep.setMargins(0, dp(10), 0, dp(14));
+        root.addView(tone, tonep);
 
         TextView line = new TextView(this);
         line.setBackgroundColor(Color.LTGRAY);
-        root.addView(line, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)));
+        root.addView(line, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(1)));
 
         TextView h = text("Historial", 20, Color.rgb(30, 30, 30));
         h.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -112,10 +128,25 @@ public class MainActivity extends Activity {
         history.setTextIsSelectable(true);
         root.addView(history);
 
-        TextView note = text("\nLa app queda escuchando en segundo plano. No usa WhatsApp y una misma orden no genera dos avisos.", 13, Color.GRAY);
+        TextView note = text("\nLa app queda escuchando en segundo plano. Las ventas confirmadas dejan de aparecer como nuevas en los otros celulares conectados.", 13, Color.GRAY);
         root.addView(note);
 
         setContentView(scroll);
+    }
+
+    private void openToneSettings() {
+        try {
+            Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS);
+            i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            i.putExtra(Settings.EXTRA_CHANNEL_ID, SaleListenerService.SALES_CHANNEL);
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                Intent fallback = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                fallback.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                startActivity(fallback);
+            } catch (Exception ignored) {}
+        }
     }
 
     private void requestNotificationsIfNeeded() {
@@ -134,7 +165,8 @@ public class MainActivity extends Activity {
 
     private void refresh() {
         int n = SaleStore.unread(this);
-        unread.setText(n == 1 ? "1 venta nueva" : n + " ventas nuevas");
+        unread.setText(n == 1 ? "1 venta nueva · VER" : n + " ventas nuevas · VER");
+        unread.setEnabled(n > 0);
         boolean c = SaleStore.connected(this);
         long at = SaleStore.connectedAt(this);
         String time = at > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at)) : "";
