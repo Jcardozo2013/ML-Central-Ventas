@@ -9,13 +9,19 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class HistoryRestore {
     private static final int MAX_HISTORY = 5000;
     private HistoryRestore() {}
+
+    private static SharedPreferences prefs(Context context) {
+        return context.getApplicationContext().getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
+    }
 
     private static JSONObject makeItem(String orderId, String display, long saleUnix) {
         JSONObject item = new JSONObject();
@@ -33,7 +39,7 @@ public final class HistoryRestore {
     private static synchronized void upsertInternal(Context context, String orderId, String display, long saleUnix) {
         if (orderId == null || orderId.trim().isEmpty()) return;
         Context app = context.getApplicationContext();
-        SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
+        SharedPreferences p = prefs(app);
         JSONArray old;
         try { old = new JSONArray(p.getString("history", "[]")); }
         catch (Exception e) { old = new JSONArray(); }
@@ -65,44 +71,73 @@ public final class HistoryRestore {
 
     public static void upsert(Context context, String orderId, String display, long saleUnix) {
         upsertInternal(context, orderId, display, saleUnix);
-        context.getApplicationContext().getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE)
-                .edit().putBoolean("history_restore_done_v1", true).apply();
+        prefs(context).edit().putBoolean("history_restore_done_v1", true).apply();
     }
 
     public static void beginFullRestore(Context context, String requestId, int expected) {
-        Context app = context.getApplicationContext();
-        SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
+        SharedPreferences p = prefs(context);
         String rid = requestId == null ? "" : requestId.trim();
         p.edit()
-                .putString("full_history_active_request_v2", rid)
-                .putInt("full_history_expected_v2", Math.max(0, expected))
-                .putInt("full_history_received_v2", 0)
-                .putBoolean("full_history_restore_done_v2", false)
+                .putString("full_history_active_request_v3", rid)
+                .putInt("full_history_expected_v3", Math.max(0, expected))
+                .putInt("full_history_received_v3", 0)
+                .putStringSet("full_history_received_ids_v3", new HashSet<>())
+                .putBoolean("full_history_restore_done_v3", false)
                 .apply();
     }
 
     public static void upsertFull(Context context, String requestId, String orderId, String display, long saleUnix) {
         Context app = context.getApplicationContext();
-        SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
-        String active = p.getString("full_history_active_request_v2", "");
+        SharedPreferences p = prefs(app);
+        String active = p.getString("full_history_active_request_v3", "");
         String rid = requestId == null ? "" : requestId.trim();
         if (active != null && !active.trim().isEmpty() && !active.trim().equals(rid)) return;
-        upsertInternal(app, orderId, display, saleUnix);
-        int n = p.getInt("full_history_received_v2", 0);
-        p.edit().putInt("full_history_received_v2", n + 1).apply();
+        String oid = orderId == null ? "" : orderId.trim();
+        if (oid.isEmpty()) return;
+        upsertInternal(app, oid, display, saleUnix);
+        Set<String> ids = new HashSet<>(p.getStringSet("full_history_received_ids_v3", new HashSet<>()));
+        ids.add(oid);
+        p.edit()
+                .putStringSet("full_history_received_ids_v3", ids)
+                .putInt("full_history_received_v3", ids.size())
+                .apply();
     }
 
     public static void completeFullRestore(Context context, String requestId, int total) {
-        Context app = context.getApplicationContext();
-        SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
-        String active = p.getString("full_history_active_request_v2", "");
+        SharedPreferences p = prefs(context);
+        String active = p.getString("full_history_active_request_v3", "");
         String rid = requestId == null ? "" : requestId.trim();
         if (active != null && !active.trim().isEmpty() && !active.trim().equals(rid)) return;
-        p.edit()
-                .putBoolean("full_history_restore_done_v2", true)
-                .putInt("full_history_expected_v2", Math.max(0, total))
-                .putString("full_history_active_request_v2", "")
-                .putLong("full_history_completed_at_v2", System.currentTimeMillis())
-                .apply();
+        int expected = Math.max(0, total);
+        int received = p.getInt("full_history_received_v3", 0);
+        boolean complete = expected == 0 || received >= expected;
+        SharedPreferences.Editor e = p.edit()
+                .putInt("full_history_expected_v3", expected)
+                .putBoolean("full_history_restore_done_v3", complete)
+                .putLong("full_history_completed_at_v3", complete ? System.currentTimeMillis() : 0L);
+        if (complete) e.putString("full_history_active_request_v3", "");
+        e.apply();
+    }
+
+    private static int historyCount(Context context) {
+        try { return new JSONArray(prefs(context).getString("history", "[]")).length(); }
+        catch (Exception ignored) { return 0; }
+    }
+
+    public static String statusText(Context context) {
+        SharedPreferences p = prefs(context);
+        boolean done = p.getBoolean("full_history_restore_done_v3", false);
+        int expected = p.getInt("full_history_expected_v3", 0);
+        int received = p.getInt("full_history_received_v3", 0);
+        String active = p.getString("full_history_active_request_v3", "");
+        if (done) {
+            int count = expected > 0 ? Math.max(received, expected) : historyCount(context);
+            return "Historial completo: " + count + " ventas";
+        }
+        if (active != null && !active.trim().isEmpty()) {
+            if (expected > 0) return "Restaurando historial: " + received + "/" + expected;
+            return "Restaurando historial…";
+        }
+        return "Historial: esperando sincronización con Windows…";
     }
 }
