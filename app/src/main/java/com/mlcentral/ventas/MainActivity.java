@@ -31,6 +31,12 @@ public class MainActivity extends Activity {
     private TextView monthProfit;
     private TextView todayHistory;
     private final Handler handler = new Handler();
+    private final Runnable historyRetry = new Runnable() {
+        @Override public void run() {
+            ReadSync.requestHistoryOnceAsync(MainActivity.this);
+            handler.postDelayed(this, 120000L);
+        }
+    };
 
     private final BroadcastReceiver saleReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { refresh(); }
@@ -173,9 +179,16 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onStart() {
-        super.onStart(); IntentFilter f = new IntentFilter("com.mlcentral.ventas.SALE_RECEIVED");
+        super.onStart();
+        IntentFilter f = new IntentFilter("com.mlcentral.ventas.SALE_RECEIVED");
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(saleReceiver, f, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(saleReceiver, f);
+        handler.removeCallbacks(historyRetry);
+        handler.post(historyRetry);
     }
-    @Override protected void onStop() { try { unregisterReceiver(saleReceiver); } catch (Exception ignored) {} super.onStop(); }
+    @Override protected void onStop() {
+        handler.removeCallbacks(historyRetry);
+        try { unregisterReceiver(saleReceiver); } catch (Exception ignored) {}
+        super.onStop();
+    }
     @Override protected void onResume() { super.onResume(); ReadSync.requestHistoryOnceAsync(this); refresh(); }
 }
