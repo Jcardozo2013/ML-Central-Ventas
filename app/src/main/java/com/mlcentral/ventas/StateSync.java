@@ -156,6 +156,15 @@ public final class StateSync {
         return false;
     }
 
+    private static boolean success(JSONObject body) {
+        if (body == null) return false;
+        Object raw = body.opt("success");
+        if (raw instanceof Boolean) return (Boolean) raw;
+        if (raw instanceof Number) return ((Number) raw).intValue() == 1;
+        String s = raw == null ? "" : String.valueOf(raw).trim().toLowerCase();
+        return "1".equals(s) || "true".equals(s) || "yes".equals(s);
+    }
+
     public static synchronized void handleResult(Context context, JSONObject body) {
         if (body == null || !"state_change_result_v1".equals(body.optString("type", ""))) return;
         Context app = context.getApplicationContext();
@@ -170,7 +179,8 @@ public final class StateSync {
         prefs(app).edit().putString(PENDING_KEY, out.toString()).apply();
         JSONObject state = body.optJSONObject("state");
         if (state != null) StateStore.upsertState(app, state);
-        String message = body.optString("message", body.optInt("success", 0) == 1 ? "Cambio confirmado" : "Cambio rechazado");
-        StateStore.setStatus(app, (body.optInt("success", 0) == 1 ? "PC confirmó: " : "PC rechazó: ") + message);
+        boolean ok = success(body);
+        String message = body.optString("message", ok ? "Cambio confirmado" : "Cambio rechazado");
+        StateStore.setStatus(app, (ok ? "PC confirmó: " : "PC rechazó: ") + message);
     }
 }
