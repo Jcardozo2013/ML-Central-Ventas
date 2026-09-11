@@ -1,6 +1,7 @@
 package com.mlcentral.ventas;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -15,7 +16,9 @@ import java.util.List;
 
 public final class ReadSync {
     public static final String TITLE = "MLC_READ_SYNC_V1";
+    public static final String HISTORY_REQUEST_TITLE = "MLC_HISTORY_REQUEST_V1";
     private static volatile boolean sending = false;
+    private static volatile boolean requestingHistory = false;
 
     private ReadSync() {}
 
@@ -38,7 +41,7 @@ public final class ReadSync {
             try {
                 List<String> ids = SaleStore.pendingReadSync(app);
                 if (ids.isEmpty()) return;
-                if (publish(ids)) SaleStore.clearPendingReadSync(app, ids);
+                if (publishRead(ids)) SaleStore.clearPendingReadSync(app, ids);
             } finally {
                 sending = false;
             }
@@ -47,19 +50,28 @@ public final class ReadSync {
         t.start();
     }
 
-    private static boolean publish(List<String> ids) {
+    public static void requestHistoryOnceAsync(Context context) {
+        Context app = context.getApplicationContext();
+        SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
+        if (p.getBoolean("history_request_sent_v1", false)) return;
+        synchronized (ReadSync.class) {
+            if (requestingHistory) return;
+            requestingHistory = true;
+        }
+        Thread t = new Thread(() -> {
+            try {
+                if (publishHistoryRequest()) p.edit().putBoolean("history_request_sent_v1", true).apply();
+            } finally {
+                requestingHistory = false;
+            }
+        }, "MLCentralHistoryRequest");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static boolean post(String title, byte[] data, String userAgent) {
         HttpURLConnection conn = null;
         try {
-            JSONArray arr = new JSONArray();
-            for (String id : ids) if (id != null && !id.trim().isEmpty()) arr.put(id.trim());
-            if (arr.length() == 0) return true;
-
-            JSONObject body = new JSONObject();
-            body.put("type", "read_sync_v1");
-            body.put("ids", arr);
-            body.put("at", System.currentTimeMillis() / 1000L);
-            byte[] data = body.toString().getBytes(StandardCharsets.UTF_8);
-
             URL url = new URL(AppConfig.BASE_URL + topic());
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
@@ -67,9 +79,9 @@ public final class ReadSync {
             conn.setReadTimeout(12000);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
-            conn.setRequestProperty("Title", TITLE);
+            conn.setRequestProperty("Title", title);
             conn.setRequestProperty("Priority", "min");
-            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.2 Android");
+            conn.setRequestProperty("User-Agent", userAgent);
             conn.setFixedLengthStreamingMode(data.length);
             try (OutputStream os = conn.getOutputStream()) { os.write(data); }
             int code = conn.getResponseCode();
@@ -78,6 +90,32 @@ public final class ReadSync {
             return false;
         } finally {
             if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static boolean publishRead(List<String> ids) {
+        try {
+            JSONArray arr = new JSONArray();
+            for (String id : ids) if (id != null && !id.trim().isEmpty()) arr.put(id.trim());
+            if (arr.length() == 0) return true;
+            JSONObject body = new JSONObject();
+            body.put("type", "read_sync_v1");
+            body.put("ids", arr);
+            body.put("at", System.currentTimeMillis() / 1000L);
+            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.5 Android");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static boolean publishHistoryRequest() {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("type", "history_request_v1");
+            body.put("at", System.currentTimeMillis() / 1000L);
+            return post(HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.5 Android");
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
