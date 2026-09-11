@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
@@ -23,6 +24,7 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     private TextView status;
+    private TextView modeBadge;
     private TextView historyStatus;
     private TextView stateStatus;
     private Button unread;
@@ -85,8 +87,8 @@ public class MainActivity extends Activity {
         connectionRow.setGravity(Gravity.CENTER_VERTICAL);
         status = UiKit.text(this, "● Conectando…", 15, UiKit.ORANGE, true);
         connectionRow.addView(status, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        TextView live = UiKit.pill(this, "EN VIVO", UiKit.GREEN, UiKit.GREEN_SOFT);
-        connectionRow.addView(live);
+        modeBadge = UiKit.pill(this, "SIN ENLACE", UiKit.ORANGE, UiKit.ORANGE_SOFT);
+        connectionRow.addView(modeBadge);
         connectionCard.addView(connectionRow);
         historyStatus = UiKit.text(this, "Historial: esperando sincronización con Windows…", 13, UiKit.MUTED, false);
         historyStatus.setPadding(0, UiKit.dp(this, 8), 0, 0);
@@ -249,8 +251,28 @@ public class MainActivity extends Activity {
         boolean c = SaleStore.connected(this);
         long at = SaleStore.connectedAt(this);
         String time = at > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at)) : "";
-        status.setText(c ? "● Conectado · " + time : "● Reconectando…");
-        status.setTextColor(c ? UiKit.GREEN : UiKit.ORANGE);
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        String mode = p.getString("connection_mode", "");
+        if (c && "backup".equals(mode)) {
+            status.setText("● Conectado · respaldo · " + time);
+            status.setTextColor(UiKit.ORANGE);
+            modeBadge.setText("RESPALDO");
+            modeBadge.setTextColor(UiKit.ORANGE);
+            modeBadge.setBackground(UiKit.rounded(UiKit.ORANGE_SOFT, 99, this));
+        } else if (c) {
+            status.setText("● Conectado · " + time);
+            status.setTextColor(UiKit.GREEN);
+            modeBadge.setText("EN VIVO");
+            modeBadge.setTextColor(UiKit.GREEN);
+            modeBadge.setBackground(UiKit.rounded(UiKit.GREEN_SOFT, 99, this));
+        } else {
+            status.setText("● Reconectando…");
+            status.setTextColor(UiKit.ORANGE);
+            modeBadge.setText("SIN ENLACE");
+            modeBadge.setTextColor(UiKit.ORANGE);
+            modeBadge.setBackground(UiKit.rounded(UiKit.ORANGE_SOFT, 99, this));
+        }
+
         historyStatus.setText(HistoryRestore.statusText(this));
         String stateText = StateStore.statusText(this);
         int pending = StateSync.pendingCount(this);
