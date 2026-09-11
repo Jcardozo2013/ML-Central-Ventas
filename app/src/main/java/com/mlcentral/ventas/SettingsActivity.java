@@ -61,6 +61,12 @@ public class SettingsActivity extends Activity {
         Button reconnect = primaryButton("Reconectar ahora");
         reconnect.setOnClickListener(v -> reconnect());
         connection.addView(reconnect, UiKit.fullWidth(this, 12, 0));
+        Button diagSync = UiKit.button(this, "Diagnóstico enlace con Windows");
+        diagSync.setOnClickListener(v -> SyncDiagnostics.run(this));
+        connection.addView(diagSync, UiKit.fullWidth(this, 8, 0));
+        TextView diagHint = UiKit.text(this, "Envía una prueba PING por el canal de Estados y espera la respuesta de Windows. El resultado se puede copiar.", 12, UiKit.MUTED, false);
+        diagHint.setPadding(0, UiKit.dp(this, 7), 0, 0);
+        connection.addView(diagHint);
         root.addView(connection, UiKit.fullWidth(this, 7, 18));
 
         root.addView(sectionTitle("VENTAS"));
