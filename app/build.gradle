@@ -6,6 +6,10 @@ android {
     namespace 'com.mlcentral.ventas'
     compileSdk 35
 
+    buildFeatures {
+        buildConfig true
+    }
+
     signingConfigs {
         stableDebug {
             storeFile file(System.getenv('HOME') + '/.android/debug.keystore')
