@@ -27,6 +27,9 @@ public class SaleListenerService extends Service {
     public static final String SALES_CHANNEL = "mlc_sales_urgent";
     public static final String DELIVERY_CHANNEL = "mlc_delivery_status_v1";
     public static final String HISTORY_SALE_TITLE = "MLC_HISTORY_SALE_V1";
+    public static final String FULL_HISTORY_BEGIN_TITLE = "MLC_FULL_HISTORY_BEGIN_V2";
+    public static final String FULL_HISTORY_SALE_TITLE = "MLC_FULL_HISTORY_SALE_V2";
+    public static final String FULL_HISTORY_END_TITLE = "MLC_FULL_HISTORY_END_V2";
     private volatile boolean running = false;
     private Thread worker;
     private Thread syncWorker;
@@ -64,7 +67,7 @@ public class SaleListenerService extends Service {
                 conn = (HttpURLConnection) new java.net.URL(url).openConnection();
                 conn.setConnectTimeout(15000); conn.setReadTimeout(0);
                 conn.setRequestProperty("Accept", "application/x-ndjson");
-                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.5 Android");
+                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.7 Android");
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
                 SaleStore.setConnected(this, true); ReadSync.flushPendingAsync(this); updateServiceNotification("Conectado · esperando ventas y entregas"); backoff = 2;
@@ -95,7 +98,7 @@ public class SaleListenerService extends Service {
                 String last = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).getString("last_read_sync_id", "");
                 String url = ReadSync.streamUrl(); if (last != null && !last.isEmpty()) url += "?since=" + URLEncoder.encode(last, StandardCharsets.UTF_8.name());
                 conn = (HttpURLConnection) new java.net.URL(url).openConnection();
-                conn.setConnectTimeout(15000); conn.setReadTimeout(0); conn.setRequestProperty("Accept", "application/x-ndjson"); conn.setRequestProperty("User-Agent", "MLCentralVentas/1.5 Android");
+                conn.setConnectTimeout(15000); conn.setReadTimeout(0); conn.setRequestProperty("Accept", "application/x-ndjson"); conn.setRequestProperty("User-Agent", "MLCentralVentas/1.7 Android");
                 int code = conn.getResponseCode(); if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code); backoff = 2;
                 BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
                 String line;
@@ -128,21 +131,57 @@ public class SaleListenerService extends Service {
         return t.contains("PAQUETE ENTREGADO") && t.contains("ML CENTRAL");
     }
 
-    private boolean handleHistorySale(JSONObject o) {
-        if (!HISTORY_SALE_TITLE.equals(o.optString("title", ""))) return false;
-        try {
-            JSONObject body = new JSONObject(o.optString("message", "{}"));
-            if (!"history_sale_v1".equals(body.optString("type", ""))) return true;
-            String orderId = body.optString("order_id", "").trim();
-            if (orderId.isEmpty()) return true;
-            HistoryRestore.upsert(this, orderId, body.optString("display", ""), body.optLong("sale_unix", 0L));
-            broadcastRefresh();
-        } catch (Exception ignored) {}
-        return true;
+    private boolean handleHistoryMessage(JSONObject o) {
+        String title = o.optString("title", "");
+        if (HISTORY_SALE_TITLE.equals(title)) {
+            try {
+                JSONObject body = new JSONObject(o.optString("message", "{}"));
+                if (!"history_sale_v1".equals(body.optString("type", ""))) return true;
+                String orderId = body.optString("order_id", "").trim();
+                if (orderId.isEmpty()) return true;
+                HistoryRestore.upsert(this, orderId, body.optString("display", ""), body.optLong("sale_unix", 0L));
+                broadcastRefresh();
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        if (FULL_HISTORY_BEGIN_TITLE.equals(title)) {
+            try {
+                JSONObject body = new JSONObject(o.optString("message", "{}"));
+                if (!"full_history_begin_v2".equals(body.optString("type", ""))) return true;
+                HistoryRestore.beginFullRestore(this, body.optString("request_id", ""), body.optInt("total", 0));
+                broadcastRefresh();
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        if (FULL_HISTORY_SALE_TITLE.equals(title)) {
+            try {
+                JSONObject body = new JSONObject(o.optString("message", "{}"));
+                if (!"full_history_sale_v2".equals(body.optString("type", ""))) return true;
+                String orderId = body.optString("order_id", "").trim();
+                if (orderId.isEmpty()) return true;
+                HistoryRestore.upsertFull(this, body.optString("request_id", ""), orderId,
+                        body.optString("display", ""), body.optLong("sale_unix", 0L));
+                broadcastRefresh();
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        if (FULL_HISTORY_END_TITLE.equals(title)) {
+            try {
+                JSONObject body = new JSONObject(o.optString("message", "{}"));
+                if (!"full_history_end_v2".equals(body.optString("type", ""))) return true;
+                HistoryRestore.completeFullRestore(this, body.optString("request_id", ""), body.optInt("total", 0));
+                broadcastRefresh();
+            } catch (Exception ignored) {}
+            return true;
+        }
+        return false;
     }
 
     private void handleMessage(JSONObject o) {
-        if (handleHistorySale(o)) return;
+        if (handleHistoryMessage(o)) return;
         String saleId = o.optString("sequence_id", "").trim(); if (saleId.isEmpty()) saleId = o.optString("id", "").trim(); if (saleId.isEmpty()) return;
         String title = o.optString("title", "🛒 NUEVA VENTA — ML CENTRAL");
         String message = o.optString("message", "Venta nueva");
