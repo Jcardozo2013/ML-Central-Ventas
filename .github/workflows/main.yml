@@ -14,6 +14,20 @@ jobs:
       - name: Descargar proyecto
         uses: actions/checkout@v4
 
+      - name: Leer versión declarada
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_VERSION="$(sed -n "s/^[[:space:]]*versionName[[:space:]]*'\([^']*\)'.*/\1/p" app/build.gradle | head -1)"
+          APP_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle | head -1)"
+          if [ -z "$APP_VERSION" ] || [ -z "$APP_CODE" ]; then
+            echo "ERROR: no se pudo leer versionName/versionCode de app/build.gradle"
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "APP_CODE=$APP_CODE" >> "$GITHUB_ENV"
+          echo "Compilando versión $APP_VERSION (code $APP_CODE)"
+
       - name: Configurar Java
         uses: actions/setup-java@v5
         with:
@@ -116,62 +130,75 @@ jobs:
       - name: Compilar APK prueba 1
         run: gradle clean assembleDebug --stacktrace
 
-      - name: Verificar firma APK prueba 1
+      - name: Verificar versión y firma APK prueba 1
         shell: bash
         run: |
           set -euo pipefail
-          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.9-build1.apk
+          APK1="ML-Central-Ventas-v${APP_VERSION}-build1.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK1"
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.9-build1.apk 2>&1 | tee apksigner-build1.txt
-          APK_SHA_1="$(grep -i 'certificate SHA-256 digest' apksigner-build1.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
-          EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
-          if [ -z "$APK_SHA_1" ]; then
-            echo "ERROR: no se pudo leer la huella del APK final."
-            cat apksigner-build1.txt
+          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
+          BADGING="$($AAPT dump badging "$APK1" | head -1)"
+          ACTUAL_VERSION="$(printf '%s\n' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+          ACTUAL_CODE="$(printf '%s\n' "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
+          echo "APK 1 declara versionName=$ACTUAL_VERSION versionCode=$ACTUAL_CODE"
+          if [ "$ACTUAL_VERSION" != "$APP_VERSION" ] || [ "$ACTUAL_CODE" != "$APP_CODE" ]; then
+            echo "ERROR: la versión interna del APK 1 no coincide con app/build.gradle"
             exit 1
           fi
-          if [ "$APK_SHA_1" != "$EXPECTED" ]; then
-            echo "ERROR: el APK final NO usa la firma estable."
-            echo "Esperada: $EXPECTED"
-            echo "APK 1: $APK_SHA_1"
+          "$APKSIGNER" verify --print-certs "$APK1" 2>&1 | tee apksigner-build1.txt
+          APK_SHA_1="$(grep -i 'certificate SHA-256 digest' apksigner-build1.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
+          if [ -z "$APK_SHA_1" ] || [ "$APK_SHA_1" != "$EXPECTED" ]; then
+            echo "ERROR: el APK 1 no usa la firma estable esperada."
             exit 1
           fi
           printf '%s\n' "$APK_SHA_1" > signing_apk_build1_sha256.txt
-          echo "APK prueba 1 SHA256: $APK_SHA_1"
 
       - name: Compilar APK prueba 2
         run: gradle clean assembleDebug --stacktrace
 
-      - name: Verificar firma APK prueba 2 y preparar final
+      - name: Verificar versión y firma APK final
         shell: bash
         run: |
           set -euo pipefail
-          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.9.apk
+          FINAL="ML-Central-Ventas-v${APP_VERSION}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$FINAL"
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.9.apk 2>&1 | tee apksigner-build2.txt
+          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
+          BADGING="$($AAPT dump badging "$FINAL" | head -1)"
+          ACTUAL_VERSION="$(printf '%s\n' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+          ACTUAL_CODE="$(printf '%s\n' "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
+          echo "APK FINAL declara versionName=$ACTUAL_VERSION versionCode=$ACTUAL_CODE"
+          if [ "$ACTUAL_VERSION" != "$APP_VERSION" ] || [ "$ACTUAL_CODE" != "$APP_CODE" ]; then
+            echo "ERROR: la versión interna del APK FINAL no coincide con app/build.gradle"
+            exit 1
+          fi
+          "$APKSIGNER" verify --print-certs "$FINAL" 2>&1 | tee apksigner-build2.txt
           APK_SHA_2="$(grep -i 'certificate SHA-256 digest' apksigner-build2.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
           APK_SHA_1="$(cat signing_apk_build1_sha256.txt | tr -d '\r\n :\t' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
           if [ -z "$APK_SHA_2" ] || [ "$APK_SHA_2" != "$EXPECTED" ] || [ "$APK_SHA_2" != "$APK_SHA_1" ]; then
             echo "ERROR: las dos compilaciones no tienen exactamente la firma esperada."
-            echo "Esperada: $EXPECTED"
-            echo "APK 1: $APK_SHA_1"
-            echo "APK 2: $APK_SHA_2"
             exit 1
           fi
           printf '%s\n' "$APK_SHA_2" > signing_apk_final_sha256.txt
-          echo "APK v1.9 firma FINAL verificada: $APK_SHA_2"
+          printf '%s\n' "$ACTUAL_VERSION" > apk_version_verified.txt
+          printf '%s\n' "$ACTUAL_CODE" > apk_version_code_verified.txt
+          echo "APK v$ACTUAL_VERSION (code $ACTUAL_CODE) verificado y firmado correctamente."
 
       - name: Guardar APK y configuración
         uses: actions/upload-artifact@v4
         with:
           name: ML-Central-Ventas-APK
           path: |
-            ML-Central-Ventas-v1.9.apk
+            ML-Central-Ventas-v${{ env.APP_VERSION }}.apk
             mlcentral_topic.txt
             signing_keystore_sha256.txt
             signing_apk_build1_sha256.txt
             signing_apk_final_sha256.txt
+            apk_version_verified.txt
+            apk_version_code_verified.txt
           retention-days: 90
