@@ -42,7 +42,10 @@ public final class HistoryRestore {
         } else {
             for (int i = 0; i < old.length() && out.length() < MAX_HISTORY; i++) out.put(i == existing ? item : old.opt(i));
         }
-        p.edit().putString("history", out.toString()).apply();
+        p.edit()
+                .putString("history", out.toString())
+                .putBoolean("history_restore_done_v1", true)
+                .apply();
         SaleStore.markSeen(app, wanted);
     }
 }
