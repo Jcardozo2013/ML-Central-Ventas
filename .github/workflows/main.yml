@@ -123,10 +123,14 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.8-build1.apk
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          APK_SHA_1="$($APKSIGNER verify --print-certs ML-Central-Ventas-v1.8-build1.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
+          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.8-build1.apk 2>&1 | tee apksigner-build1.txt
+          APK_SHA_1="$(grep -i 'certificate SHA-256 digest' apksigner-build1.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
-          test -n "$APK_SHA_1"
+          if [ -z "$APK_SHA_1" ]; then
+            echo "ERROR: no se pudo leer la huella del APK final."
+            cat apksigner-build1.txt
+            exit 1
+          fi
           if [ "$APK_SHA_1" != "$EXPECTED" ]; then
             echo "ERROR: el APK final NO usa la firma estable."
             echo "Esperada: $EXPECTED"
@@ -134,6 +138,7 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$APK_SHA_1" > signing_apk_build1_sha256.txt
+          echo "APK prueba 1 SHA256: $APK_SHA_1"
 
       - name: Compilar APK prueba 2
         run: gradle clean assembleDebug --stacktrace
@@ -145,11 +150,11 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.8.apk
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          APK_SHA_2="$($APKSIGNER verify --print-certs ML-Central-Ventas-v1.8.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
+          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.8.apk 2>&1 | tee apksigner-build2.txt
+          APK_SHA_2="$(grep -i 'certificate SHA-256 digest' apksigner-build2.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
           APK_SHA_1="$(cat signing_apk_build1_sha256.txt | tr -d '\r\n :\t' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
-          if [ "$APK_SHA_2" != "$EXPECTED" ] || [ "$APK_SHA_2" != "$APK_SHA_1" ]; then
+          if [ -z "$APK_SHA_2" ] || [ "$APK_SHA_2" != "$EXPECTED" ] || [ "$APK_SHA_2" != "$APK_SHA_1" ]; then
             echo "ERROR: las dos compilaciones no tienen exactamente la firma esperada."
             echo "Esperada: $EXPECTED"
             echo "APK 1: $APK_SHA_1"
