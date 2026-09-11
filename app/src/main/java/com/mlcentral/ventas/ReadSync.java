@@ -13,10 +13,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 public final class ReadSync {
     public static final String TITLE = "MLC_READ_SYNC_V1";
     public static final String HISTORY_REQUEST_TITLE = "MLC_HISTORY_REQUEST_V1";
+    public static final String FULL_HISTORY_REQUEST_TITLE = "MLC_FULL_HISTORY_REQUEST_V2";
     private static final long HISTORY_RETRY_MS = 120000L;
     private static volatile boolean sending = false;
     private static volatile boolean requestingHistory = false;
@@ -54,23 +56,31 @@ public final class ReadSync {
     public static void requestHistoryOnceAsync(Context context) {
         Context app = context.getApplicationContext();
         SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
-        if (p.getBoolean("history_restore_done_v1", false)) return;
+        if (p.getBoolean("full_history_restore_done_v2", false)) return;
+
         long now = System.currentTimeMillis();
-        long last = p.getLong("history_request_last_at_v1", 0L);
+        long last = p.getLong("full_history_request_last_at_v2", 0L);
         if (last > 0 && now - last < HISTORY_RETRY_MS) return;
+
         synchronized (ReadSync.class) {
             if (requestingHistory) return;
             requestingHistory = true;
         }
+
         Thread t = new Thread(() -> {
             try {
-                if (publishHistoryRequest()) {
-                    p.edit().putLong("history_request_last_at_v1", System.currentTimeMillis()).apply();
+                String requestId = p.getString("full_history_request_id_v2", "");
+                if (requestId == null || requestId.trim().isEmpty()) {
+                    requestId = UUID.randomUUID().toString();
+                    p.edit().putString("full_history_request_id_v2", requestId).apply();
+                }
+                if (publishFullHistoryRequest(requestId)) {
+                    p.edit().putLong("full_history_request_last_at_v2", System.currentTimeMillis()).apply();
                 }
             } finally {
                 requestingHistory = false;
             }
-        }, "MLCentralHistoryRequest");
+        }, "MLCentralFullHistoryRequest");
         t.setDaemon(true);
         t.start();
     }
@@ -108,18 +118,19 @@ public final class ReadSync {
             body.put("type", "read_sync_v1");
             body.put("ids", arr);
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.5 Android");
+            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.7 Android");
         } catch (Exception ignored) {
             return false;
         }
     }
 
-    private static boolean publishHistoryRequest() {
+    private static boolean publishFullHistoryRequest(String requestId) {
         try {
             JSONObject body = new JSONObject();
-            body.put("type", "history_request_v1");
+            body.put("type", "full_history_request_v2");
+            body.put("request_id", requestId == null ? "" : requestId.trim());
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.5 Android");
+            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.7 Android");
         } catch (Exception ignored) {
             return false;
         }
