@@ -25,7 +25,10 @@ public final class ReadSync {
 
     private ReadSync() {}
 
-    public static String topic() { return AppConfig.TOPIC + "-readsync"; }
+    // El topic base actual ya mide 57 caracteres. ntfy admite hasta 64.
+    // Usar "-readsync" lo llevaba a 66 y ntfy devolvía HTTP 400 topic invalid.
+    // "-rs" mantiene el canal privado derivado y queda dentro del límite.
+    public static String topic() { return AppConfig.TOPIC + "-rs"; }
     public static String streamUrl() { return AppConfig.BASE_URL + topic() + "/json"; }
 
     public static void acknowledgeAsync(Context context, Collection<String> ids) {
@@ -121,7 +124,7 @@ public final class ReadSync {
             body.put("type", "read_sync_v1");
             body.put("ids", arr);
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.8 Android");
+            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.14 Android");
         } catch (Exception ignored) {
             return false;
         }
@@ -133,7 +136,7 @@ public final class ReadSync {
             body.put("type", "full_history_request_v2");
             body.put("request_id", requestId == null ? "" : requestId.trim());
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.8 Android");
+            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.14 Android");
         } catch (Exception ignored) {
             return false;
         }
