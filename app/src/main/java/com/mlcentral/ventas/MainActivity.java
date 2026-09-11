@@ -41,6 +41,7 @@ public class MainActivity extends Activity {
         buildUi();
         requestNotificationsIfNeeded();
         startListener();
+        ReadSync.requestHistoryOnceAsync(this);
         refresh();
     }
 
@@ -98,19 +99,35 @@ public class MainActivity extends Activity {
         Button restart = new Button(this); restart.setText("Reconectar");
         restart.setOnClickListener(v -> { stopService(new Intent(this, SaleListenerService.class)); handler.postDelayed(this::startListener, 700); });
         root.addView(restart, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        Button test = new Button(this); test.setText("Probar aviso y sonido"); test.setOnClickListener(v -> showLocalTest());
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tp.setMargins(0, dp(10), 0, 0); root.addView(test, tp);
-        Button tone = new Button(this); tone.setText("Elegir tono de notificación"); tone.setOnClickListener(v -> openToneSettings());
-        LinearLayout.LayoutParams tonep = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tonep.setMargins(0, dp(10), 0, dp(10)); root.addView(tone, tonep);
-        root.addView(text("Las correcciones de artículo o ganancia actualizan la misma venta. También recibís un aviso separado cuando Mercado Libre confirma una entrega.", 13, Color.GRAY));
+
+        Button testSale = new Button(this); testSale.setText("Probar aviso de venta"); testSale.setOnClickListener(v -> showSaleTest());
+        LinearLayout.LayoutParams tsp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tsp.setMargins(0, dp(10), 0, 0); root.addView(testSale, tsp);
+
+        Button toneSale = new Button(this); toneSale.setText("🔊 Elegir sonido de ventas"); toneSale.setAllCaps(false); toneSale.setOnClickListener(v -> openChannelSettings(SaleListenerService.SALES_CHANNEL));
+        LinearLayout.LayoutParams tsp2 = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tsp2.setMargins(0, dp(8), 0, 0); root.addView(toneSale, tsp2);
+
+        Button testDelivery = new Button(this); testDelivery.setText("Probar aviso de entrega"); testDelivery.setOnClickListener(v -> showDeliveryTest());
+        LinearLayout.LayoutParams tdp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tdp.setMargins(0, dp(12), 0, 0); root.addView(testDelivery, tdp);
+
+        Button toneDelivery = new Button(this); toneDelivery.setText("📦 Elegir sonido de entregas"); toneDelivery.setAllCaps(false); toneDelivery.setOnClickListener(v -> openChannelSettings(SaleListenerService.DELIVERY_CHANNEL));
+        LinearLayout.LayoutParams tdp2 = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tdp2.setMargins(0, dp(8), 0, dp(10)); root.addView(toneDelivery, tdp2);
+
+        root.addView(text("Al instalar la app, solicita a ML Central Windows el historial del mes actual para reconstruir ventas y ganancias sin generar avisos nuevos.", 13, Color.GRAY));
         setContentView(scroll);
     }
 
-    private void openToneSettings() {
+    private void openChannelSettings(String channelId) {
         try {
-            Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS); i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()); i.putExtra(Settings.EXTRA_CHANNEL_ID, SaleListenerService.SALES_CHANNEL); startActivity(i);
+            Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS);
+            i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            i.putExtra(Settings.EXTRA_CHANNEL_ID, channelId);
+            startActivity(i);
         } catch (Exception e) {
-            try { Intent fallback = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS); fallback.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()); startActivity(fallback); } catch (Exception ignored) {}
+            try {
+                Intent fallback = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                fallback.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                startActivity(fallback);
+            } catch (Exception ignored) {}
         }
     }
 
@@ -137,12 +154,22 @@ public class MainActivity extends Activity {
         todayHistory.setText(SaleStore.todayHistoryText(this));
     }
 
-    private void showLocalTest() {
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? new Notification.Builder(this, SaleListenerService.SALES_CHANNEL) : new Notification.Builder(this);
-        b.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("🛒 PRUEBA — NUEVA VENTA").setContentText("Si escuchaste este sonido, los avisos están listos.").setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nCantidad: 1\nVenta: $1.500\nLa notificación de ventas está funcionando.")).setAutoCancel(true);
+    private Notification.Builder testBuilder(String channelId) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? new Notification.Builder(this, channelId) : new Notification.Builder(this);
+    }
+
+    private void showSaleTest() {
+        Notification.Builder b = testBuilder(SaleListenerService.SALES_CHANNEL);
+        b.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("🛒 PRUEBA — NUEVA VENTA").setContentText("Prueba del sonido elegido para ventas.").setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nCantidad: 1\nVenta: $1.500\nEste es el canal de VENTAS.")).setAutoCancel(true);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_MAX).setDefaults(Notification.DEFAULT_ALL);
-        nm.notify(999, b.build());
+        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(999, b.build());
+    }
+
+    private void showDeliveryTest() {
+        Notification.Builder b = testBuilder(SaleListenerService.DELIVERY_CHANNEL);
+        b.setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("📦 PRUEBA — PAQUETE ENTREGADO").setContentText("Prueba del sonido elegido para entregas.").setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nOrden: 20000...\nEstado: ✅ Entregado\nEste es el canal de ENTREGAS.")).setAutoCancel(true);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL);
+        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(998, b.build());
     }
 
     @Override protected void onStart() {
@@ -150,5 +177,5 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(saleReceiver, f, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(saleReceiver, f);
     }
     @Override protected void onStop() { try { unregisterReceiver(saleReceiver); } catch (Exception ignored) {} super.onStop(); }
-    @Override protected void onResume() { super.onResume(); refresh(); }
+    @Override protected void onResume() { super.onResume(); ReadSync.requestHistoryOnceAsync(this); refresh(); }
 }
