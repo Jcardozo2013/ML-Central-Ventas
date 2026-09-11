@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -42,8 +43,21 @@ public class SettingsActivity extends Activity {
 
         root.addView(sectionTitle("CONEXIÓN"));
         LinearLayout connection = UiKit.card(this);
-        TextView connText = UiKit.text(this, "Si el estado queda en reconectando, podés reiniciar el servicio sin cerrar la app.", 14, UiKit.MUTED, false);
+        SharedPreferences prefs = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        String mode = prefs.getString("connection_mode", "");
+        String lastError = prefs.getString("connection_last_error", "");
+        String connectionText;
+        if ("live".equals(mode)) connectionText = "Conexión en vivo activa.";
+        else if ("backup".equals(mode)) connectionText = "Conectado en modo respaldo. La app consulta el canal automáticamente cada pocos segundos.";
+        else connectionText = "Si el estado queda en reconectando, podés reiniciar el servicio sin cerrar la app.";
+        TextView connText = UiKit.text(this, connectionText, 14, UiKit.MUTED, false);
         connection.addView(connText);
+        if (lastError != null && !lastError.trim().isEmpty()) {
+            TextView error = UiKit.text(this, "Último error: " + lastError, 12, UiKit.ORANGE, false);
+            error.setTextIsSelectable(true);
+            error.setPadding(0, UiKit.dp(this, 8), 0, 0);
+            connection.addView(error);
+        }
         Button reconnect = primaryButton("Reconectar ahora");
         reconnect.setOnClickListener(v -> reconnect());
         connection.addView(reconnect, UiKit.fullWidth(this, 12, 0));
@@ -74,7 +88,7 @@ public class SettingsActivity extends Activity {
         root.addView(deliveries, UiKit.fullWidth(this, 7, 18));
 
         LinearLayout info = UiKit.card(this);
-        TextView version = UiKit.text(this, "ML Central Ventas · v1.9", 14, UiKit.TEXT, true);
+        TextView version = UiKit.text(this, "ML Central Ventas · v" + BuildConfig.VERSION_NAME, 14, UiKit.TEXT, true);
         info.addView(version);
         TextView note = UiKit.text(this, "Los sonidos se configuran desde Android y no afectan la sincronización con Windows.", 13, UiKit.MUTED, false);
         note.setPadding(0, UiKit.dp(this, 7), 0, 0);
@@ -100,6 +114,10 @@ public class SettingsActivity extends Activity {
     }
 
     private void reconnect() {
+        getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit()
+                .putString("connection_mode", "reconnecting")
+                .putString("connection_last_error", "")
+                .apply();
         stopService(new Intent(this, SaleListenerService.class));
         handler.postDelayed(() -> {
             Intent i = new Intent(this, SaleListenerService.class);
@@ -107,6 +125,7 @@ public class SettingsActivity extends Activity {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
                 else startService(i);
             } catch (Exception ignored) {}
+            recreate();
         }, 700L);
     }
 
