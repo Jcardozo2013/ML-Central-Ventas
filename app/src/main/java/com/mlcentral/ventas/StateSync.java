@@ -1,6 +1,7 @@
 package com.mlcentral.ventas;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 
 import org.json.JSONArray;
@@ -22,6 +23,8 @@ public final class StateSync {
 
     private static final String PENDING_KEY = "pending_state_commands_v1";
     private static final long REQUEST_MIN_MS = 120000L;
+    private static final int REQUEST_ATTEMPTS = 3;
+    private static final long REQUEST_RETRY_MS = 1800L;
     private static volatile boolean requesting = false;
     private static volatile boolean flushing = false;
 
@@ -32,6 +35,18 @@ public final class StateSync {
     }
 
     private static String topic() { return ReadSync.topic(); }
+
+    private static void notifyUi(Context context) {
+        try {
+            Context app = context.getApplicationContext();
+            app.sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(app.getPackageName()));
+        } catch (Exception ignored) {}
+    }
+
+    private static void setStatus(Context context, String text) {
+        StateStore.setStatus(context, text);
+        notifyUi(context);
+    }
 
     private static boolean post(String title, JSONObject body) {
         HttpURLConnection conn = null;
@@ -46,7 +61,7 @@ public final class StateSync {
             conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
             conn.setRequestProperty("Title", title);
             conn.setRequestProperty("Priority", "min");
-            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.9 Android");
+            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.10 Android");
             conn.setFixedLengthStreamingMode(data.length);
             try (OutputStream os = conn.getOutputStream()) { os.write(data); }
             int code = conn.getResponseCode();
@@ -68,17 +83,35 @@ public final class StateSync {
             if (requesting) return;
             requesting = true;
         }
+
+        setStatus(app, "Estados PC: enviando solicitud…");
         Thread t = new Thread(() -> {
             try {
                 JSONObject body = new JSONObject();
                 body.put("type", "state_request_v1");
                 body.put("request_id", UUID.randomUUID().toString());
                 body.put("at", System.currentTimeMillis() / 1000L);
-                if (post(STATE_REQUEST_TITLE, body)) {
+
+                boolean sent = false;
+                for (int attempt = 1; attempt <= REQUEST_ATTEMPTS; attempt++) {
+                    if (post(STATE_REQUEST_TITLE, body)) {
+                        sent = true;
+                        break;
+                    }
+                    if (attempt < REQUEST_ATTEMPTS) {
+                        setStatus(app, "Estados PC: reintentando envío " + (attempt + 1) + "/" + REQUEST_ATTEMPTS + "…");
+                        try { Thread.sleep(REQUEST_RETRY_MS); } catch (InterruptedException ignored) {}
+                    }
+                }
+
+                if (sent) {
                     p.edit().putLong("state_request_last_at_v1", System.currentTimeMillis()).apply();
-                    StateStore.setStatus(app, "Estados PC: solicitud enviada · esperando Windows…");
+                    setStatus(app, "Estados PC: solicitud enviada · esperando Windows…");
+                } else {
+                    setStatus(app, "Estados PC: no se pudo enviar la solicitud · revisá Internet");
                 }
             } catch (Exception ignored) {
+                setStatus(app, "Estados PC: error enviando solicitud · reintentá");
             } finally {
                 requesting = false;
             }
