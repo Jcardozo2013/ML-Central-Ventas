@@ -7,6 +7,9 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -30,6 +33,15 @@ public final class StateSync {
 
     private StateSync() {}
 
+    private static final class PostResult {
+        final boolean ok;
+        final String detail;
+        PostResult(boolean ok, String detail) {
+            this.ok = ok;
+            this.detail = detail == null ? "" : detail.trim();
+        }
+    }
+
     private static SharedPreferences prefs(Context c) {
         return c.getApplicationContext().getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
     }
@@ -48,7 +60,59 @@ public final class StateSync {
         notifyUi(context);
     }
 
-    private static boolean post(String title, JSONObject body) {
+    private static String responseDetail(HttpURLConnection conn, int code) {
+        String prefix = "HTTP " + code;
+        try {
+            InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (in == null) return prefix;
+            BufferedReader br = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+            String line = br.readLine();
+            if (line == null || line.trim().isEmpty()) return prefix;
+            String clean = line.replace('\n', ' ').replace('\r', ' ').trim();
+            if (clean.length() > 120) clean = clean.substring(0, 120);
+            return prefix + " · " + clean;
+        } catch (Exception ignored) {
+            return prefix;
+        }
+    }
+
+    private static String exceptionDetail(Exception e) {
+        String name = e == null ? "Error" : e.getClass().getSimpleName();
+        String msg = e == null || e.getMessage() == null ? "" : e.getMessage().trim();
+        if (msg.length() > 100) msg = msg.substring(0, 100);
+        return msg.isEmpty() ? name : name + " · " + msg;
+    }
+
+    private static PostResult postJson(String title, JSONObject body) {
+        HttpURLConnection conn = null;
+        try {
+            JSONObject envelope = new JSONObject();
+            envelope.put("topic", topic());
+            envelope.put("title", title);
+            envelope.put("priority", 1);
+            envelope.put("message", body.toString());
+            byte[] data = envelope.toString().getBytes(StandardCharsets.UTF_8);
+
+            URL url = new URL(AppConfig.BASE_URL);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(12000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.11 Android");
+            conn.setFixedLengthStreamingMode(data.length);
+            try (OutputStream os = conn.getOutputStream()) { os.write(data); }
+            int code = conn.getResponseCode();
+            return new PostResult(code >= 200 && code < 300, responseDetail(conn, code));
+        } catch (Exception e) {
+            return new PostResult(false, exceptionDetail(e));
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static PostResult postClassic(String title, JSONObject body) {
         HttpURLConnection conn = null;
         try {
             byte[] data = body.toString().getBytes(StandardCharsets.UTF_8);
@@ -61,16 +125,26 @@ public final class StateSync {
             conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
             conn.setRequestProperty("Title", title);
             conn.setRequestProperty("Priority", "min");
-            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.10 Android");
+            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.11 Android");
             conn.setFixedLengthStreamingMode(data.length);
             try (OutputStream os = conn.getOutputStream()) { os.write(data); }
             int code = conn.getResponseCode();
-            return code >= 200 && code < 300;
-        } catch (Exception ignored) {
-            return false;
+            return new PostResult(code >= 200 && code < 300, responseDetail(conn, code));
+        } catch (Exception e) {
+            return new PostResult(false, exceptionDetail(e));
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    private static PostResult post(String title, JSONObject body) {
+        PostResult json = postJson(title, body);
+        if (json.ok) return json;
+        PostResult classic = postClassic(title, body);
+        if (classic.ok) return classic;
+        String detail = "JSON: " + json.detail + " · clásico: " + classic.detail;
+        if (detail.length() > 180) detail = detail.substring(0, 180);
+        return new PostResult(false, detail);
     }
 
     public static void requestSnapshotAsync(Context context, boolean force) {
@@ -92,26 +166,24 @@ public final class StateSync {
                 body.put("request_id", UUID.randomUUID().toString());
                 body.put("at", System.currentTimeMillis() / 1000L);
 
-                boolean sent = false;
+                PostResult lastResult = new PostResult(false, "sin respuesta");
                 for (int attempt = 1; attempt <= REQUEST_ATTEMPTS; attempt++) {
-                    if (post(STATE_REQUEST_TITLE, body)) {
-                        sent = true;
-                        break;
-                    }
+                    lastResult = post(STATE_REQUEST_TITLE, body);
+                    if (lastResult.ok) break;
                     if (attempt < REQUEST_ATTEMPTS) {
                         setStatus(app, "Estados PC: reintentando envío " + (attempt + 1) + "/" + REQUEST_ATTEMPTS + "…");
                         try { Thread.sleep(REQUEST_RETRY_MS); } catch (InterruptedException ignored) {}
                     }
                 }
 
-                if (sent) {
+                if (lastResult.ok) {
                     p.edit().putLong("state_request_last_at_v1", System.currentTimeMillis()).apply();
                     setStatus(app, "Estados PC: solicitud enviada · esperando Windows…");
                 } else {
-                    setStatus(app, "Estados PC: no se pudo enviar la solicitud · revisá Internet");
+                    setStatus(app, "Estados PC: fallo de envío · " + lastResult.detail);
                 }
-            } catch (Exception ignored) {
-                setStatus(app, "Estados PC: error enviando solicitud · reintentá");
+            } catch (Exception e) {
+                setStatus(app, "Estados PC: error · " + exceptionDetail(e));
             } finally {
                 requesting = false;
             }
