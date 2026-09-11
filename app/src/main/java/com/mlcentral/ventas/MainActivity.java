@@ -59,7 +59,7 @@ public class MainActivity extends Activity {
         TextView title = text("ML Central Ventas", 28, Color.rgb(25, 25, 25));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
-        TextView subtitle = text("Ventas y ganancias sincronizadas con ML Central", 15, Color.DKGRAY);
+        TextView subtitle = text("Ventas, ganancias y entregas sincronizadas con ML Central", 15, Color.DKGRAY);
         subtitle.setPadding(0, dp(4), 0, dp(12));
         root.addView(subtitle);
 
@@ -102,7 +102,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tp.setMargins(0, dp(10), 0, 0); root.addView(test, tp);
         Button tone = new Button(this); tone.setText("Elegir tono de notificación"); tone.setOnClickListener(v -> openToneSettings());
         LinearLayout.LayoutParams tonep = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tonep.setMargins(0, dp(10), 0, dp(10)); root.addView(tone, tonep);
-        root.addView(text("Las correcciones de artículo o ganancia hechas en Windows actualizan la misma venta en el celular sin crear otra notificación.", 13, Color.GRAY));
+        root.addView(text("Las correcciones de artículo o ganancia actualizan la misma venta. También recibís un aviso separado cuando Mercado Libre confirma una entrega.", 13, Color.GRAY));
         setContentView(scroll);
     }
 
