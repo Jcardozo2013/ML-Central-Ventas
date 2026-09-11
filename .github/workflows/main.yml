@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configurar Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -25,11 +25,38 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Mantener firma Android entre versiones
+      - name: Recuperar firma Android estable
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
-          key: mlcentral-ventas-debug-keystore-v1
+          key: mlcentral-ventas-stable-signing-v1
+
+      - name: Asegurar firma Android y verificar huella
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -s "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 12000 \
+              -dname "CN=ML Central Ventas, OU=Android, O=ML Central, C=UY"
+          fi
+          CERT_SHA="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -rfc \
+            | openssl x509 -noout -fingerprint -sha256 \
+            | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          printf '%s\n' "$CERT_SHA" > signing_sha256.txt
+          if [ -f signing_expected_sha256.txt ]; then
+            EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
+            if [ "$CERT_SHA" != "$EXPECTED" ]; then
+              echo "ERROR: la firma Android no coincide con la huella fija esperada."
+              exit 1
+            fi
+          fi
+          echo "Firma APK SHA256: $CERT_SHA"
 
       - name: Recuperar canal privado existente
         shell: bash
@@ -38,7 +65,6 @@ jobs:
         run: |
           set -euo pipefail
           TOPIC=""
-
           PINNED_ARTIFACT_ID="9993951669"
           if curl -fsSL -L \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -47,14 +73,12 @@ jobs:
             -o previous-topic.zip; then
             TOPIC="$(unzip -p previous-topic.zip mlcentral_topic.txt 2>/dev/null | tr -d '\r\n' || true)"
           fi
-
           if [ -z "$TOPIC" ]; then
             ARTIFACT_ID="$(curl -fsSL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=ML-Central-Ventas-APK&per_page=100" \
               | python3 -c 'import json,sys; a=[x for x in json.load(sys.stdin).get("artifacts",[]) if not x.get("expired")]; print(a[0]["id"] if a else "")')"
-
             if [ -n "$ARTIFACT_ID" ] && curl -fsSL -L \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
@@ -63,39 +87,29 @@ jobs:
               TOPIC="$(unzip -p previous-topic.zip mlcentral_topic.txt 2>/dev/null | tr -d '\r\n' || true)"
             fi
           fi
-
           if [ -z "$TOPIC" ]; then
-            TOPIC="mlcentral-ventas-$(openssl rand -hex 20)"
+            echo "ERROR: no se pudo recuperar el canal privado existente."
+            exit 1
           fi
-
           printf '%s\n' "$TOPIC" > mlcentral_topic.txt
           sed -i "s/__MLC_TOPIC__/$TOPIC/g" app/src/main/java/com/mlcentral/ventas/AppConfig.java
 
-      - name: Crear sonido de venta
+      - name: Crear sonido predeterminado de venta
         shell: bash
         run: |
           mkdir -p app/src/main/res/raw
           python3 - <<'PY2'
-          import wave
-          import math
-          import struct
-
+          import wave, math, struct
           rate = 44100
           duration = 0.65
-
           with wave.open("app/src/main/res/raw/sale_chime.wav", "w") as f:
-              f.setnchannels(1)
-              f.setsampwidth(2)
-              f.setframerate(rate)
-
+              f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
               data = []
               for i in range(int(rate * duration)):
                   t = i / rate
                   freq = 880 if t < 0.22 else 1320
                   envelope = max(0.0, 1.0 - t / duration)
-                  sample = int(15000 * math.sin(2 * math.pi * freq * t) * envelope)
-                  data.append(struct.pack("<h", sample))
-
+                  data.append(struct.pack("<h", int(15000 * math.sin(2 * math.pi * freq * t) * envelope)))
               f.writeframes(b"".join(data))
           PY2
 
@@ -104,14 +118,14 @@ jobs:
 
       - name: Preparar APK
         shell: bash
-        run: |
-          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.4.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.5.apk
 
       - name: Guardar APK y configuración
         uses: actions/upload-artifact@v4
         with:
           name: ML-Central-Ventas-APK
           path: |
-            ML-Central-Ventas-v1.4.apk
+            ML-Central-Ventas-v1.5.apk
             mlcentral_topic.txt
+            signing_sha256.txt
           retention-days: 90
