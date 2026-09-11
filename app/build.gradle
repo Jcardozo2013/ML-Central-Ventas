@@ -6,11 +6,26 @@ android {
     namespace 'com.mlcentral.ventas'
     compileSdk 35
 
+    signingConfigs {
+        stableDebug {
+            storeFile file(System.getenv('HOME') + '/.android/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     defaultConfig {
         applicationId 'com.mlcentral.ventas'
         minSdk 26
         targetSdk 33
-        versionCode 8
-        versionName '1.7'
+        versionCode 9
+        versionName '1.8'
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.stableDebug
+        }
     }
 }
