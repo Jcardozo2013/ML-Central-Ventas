@@ -91,6 +91,13 @@ public final class UiKit {
         nav.setPadding(dp(a, 8), dp(a, 8), dp(a, 8), dp(a, 10));
         nav.setBackground(roundedStroke(Color.WHITE, 0, BORDER, a));
 
+        int selectedIndex = selected;
+        if (a instanceof MainActivity) selectedIndex = 0;
+        else if (a instanceof StatusActivity) selectedIndex = 1;
+        else if (a instanceof HistoryActivity) selectedIndex = 2;
+        else if (a instanceof SettingsActivity) selectedIndex = 3;
+
+        final int selectedFinal = selectedIndex;
         String[] labels = {"Inicio", "Estados", "Historial", "Config."};
         Class<?>[] screens = {MainActivity.class, StatusActivity.class, HistoryActivity.class, SettingsActivity.class};
         for (int i = 0; i < labels.length; i++) {
@@ -100,10 +107,10 @@ public final class UiKit {
             b.setAllCaps(false);
             b.setTextSize(13);
             b.setMinHeight(dp(a, 48));
-            b.setTextColor(i == selected ? ACCENT : MUTED);
-            b.setTypeface(null, i == selected ? Typeface.BOLD : Typeface.NORMAL);
-            b.setBackground(i == selected ? rounded(ACCENT_SOFT, 12, a) : rounded(Color.TRANSPARENT, 12, a));
-            b.setEnabled(i != selected);
+            b.setTextColor(i == selectedFinal ? ACCENT : MUTED);
+            b.setTypeface(null, i == selectedFinal ? Typeface.BOLD : Typeface.NORMAL);
+            b.setBackground(i == selectedFinal ? rounded(ACCENT_SOFT, 12, a) : rounded(Color.TRANSPARENT, 12, a));
+            b.setEnabled(i != selectedFinal);
             b.setOnClickListener(v -> {
                 Intent intent = new Intent(a, screens[index]);
                 intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
