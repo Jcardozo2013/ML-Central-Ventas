@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -33,6 +34,7 @@ public class SaleListenerService extends Service {
     private volatile boolean running = false;
     private Thread worker;
     private Thread syncWorker;
+    private Thread stateWorker;
     private PowerManager.WakeLock wakeLock;
 
     @Override public void onCreate() {
@@ -52,8 +54,22 @@ public class SaleListenerService extends Service {
             running = true;
             worker = new Thread(this::listenLoop, "MLCentralVentasListener"); worker.setDaemon(true); worker.start();
             syncWorker = new Thread(this::listenReadSyncLoop, "MLCentralReadSyncListener"); syncWorker.setDaemon(true); syncWorker.start();
+            stateWorker = new Thread(this::stateMaintenanceLoop, "MLCentralStateMaintenance"); stateWorker.setDaemon(true); stateWorker.start();
         }
         return START_STICKY;
+    }
+
+    private void stateMaintenanceLoop() {
+        while (running) {
+            try {
+                StateSync.flushPendingAsync(this);
+                StateSync.requestSnapshotAsync(this, false);
+                Thread.sleep(120000L);
+            } catch (InterruptedException ignored) {
+            } catch (Exception ignored) {
+                try { Thread.sleep(15000L); } catch (InterruptedException ignored2) {}
+            }
+        }
     }
 
     private void listenLoop() {
@@ -67,10 +83,15 @@ public class SaleListenerService extends Service {
                 conn = (HttpURLConnection) new java.net.URL(url).openConnection();
                 conn.setConnectTimeout(15000); conn.setReadTimeout(0);
                 conn.setRequestProperty("Accept", "application/x-ndjson");
-                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.7 Android");
+                conn.setRequestProperty("User-Agent", "MLCentralVentas/1.9 Android");
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
-                SaleStore.setConnected(this, true); ReadSync.flushPendingAsync(this); updateServiceNotification("Conectado · esperando ventas y entregas"); backoff = 2;
+                SaleStore.setConnected(this, true);
+                ReadSync.flushPendingAsync(this);
+                StateSync.flushPendingAsync(this);
+                StateSync.requestSnapshotAsync(this, false);
+                updateServiceNotification("Conectado · ventas y estados sincronizados");
+                backoff = 2;
                 BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
                 String line;
                 while (running && (line = br.readLine()) != null) {
@@ -98,7 +119,7 @@ public class SaleListenerService extends Service {
                 String last = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).getString("last_read_sync_id", "");
                 String url = ReadSync.streamUrl(); if (last != null && !last.isEmpty()) url += "?since=" + URLEncoder.encode(last, StandardCharsets.UTF_8.name());
                 conn = (HttpURLConnection) new java.net.URL(url).openConnection();
-                conn.setConnectTimeout(15000); conn.setReadTimeout(0); conn.setRequestProperty("Accept", "application/x-ndjson"); conn.setRequestProperty("User-Agent", "MLCentralVentas/1.7 Android");
+                conn.setConnectTimeout(15000); conn.setReadTimeout(0); conn.setRequestProperty("Accept", "application/x-ndjson"); conn.setRequestProperty("User-Agent", "MLCentralVentas/1.9 Android");
                 int code = conn.getResponseCode(); if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code); backoff = 2;
                 BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
                 String line;
@@ -129,6 +150,33 @@ public class SaleListenerService extends Service {
     private boolean isDeliveryEvent(String title) {
         String t = title == null ? "" : title.toUpperCase(Locale.ROOT);
         return t.contains("PAQUETE ENTREGADO") && t.contains("ML CENTRAL");
+    }
+
+    private boolean handleStateMessage(JSONObject o) {
+        String title = o.optString("title", "");
+        if (!StateSync.STATE_SNAPSHOT_BEGIN_TITLE.equals(title)
+                && !StateSync.STATE_SNAPSHOT_CHUNK_TITLE.equals(title)
+                && !StateSync.STATE_SNAPSHOT_END_TITLE.equals(title)
+                && !StateSync.STATE_CHANGE_RESULT_TITLE.equals(title)) return false;
+        try {
+            JSONObject body = new JSONObject(o.optString("message", "{}"));
+            if (StateSync.STATE_SNAPSHOT_BEGIN_TITLE.equals(title)
+                    && "state_snapshot_begin_v1".equals(body.optString("type", ""))) {
+                StateStore.beginSnapshot(this, body.optString("batch_id", ""), body.optInt("total", 0));
+            } else if (StateSync.STATE_SNAPSHOT_CHUNK_TITLE.equals(title)
+                    && "state_snapshot_chunk_v1".equals(body.optString("type", ""))) {
+                JSONArray sales = body.optJSONArray("sales");
+                StateStore.mergeChunk(this, body.optString("batch_id", ""), sales);
+            } else if (StateSync.STATE_SNAPSHOT_END_TITLE.equals(title)
+                    && "state_snapshot_end_v1".equals(body.optString("type", ""))) {
+                boolean complete = StateStore.completeSnapshot(this, body.optString("batch_id", ""), body.optInt("total", 0));
+                if (!complete) StateSync.requestSnapshotAsync(this, true);
+            } else if (StateSync.STATE_CHANGE_RESULT_TITLE.equals(title)) {
+                StateSync.handleResult(this, body);
+            }
+            broadcastRefresh();
+        } catch (Exception ignored) {}
+        return true;
     }
 
     private boolean handleHistoryMessage(JSONObject o) {
@@ -181,6 +229,7 @@ public class SaleListenerService extends Service {
     }
 
     private void handleMessage(JSONObject o) {
+        if (handleStateMessage(o)) return;
         if (handleHistoryMessage(o)) return;
         String saleId = o.optString("sequence_id", "").trim(); if (saleId.isEmpty()) saleId = o.optString("id", "").trim(); if (saleId.isEmpty()) return;
         String title = o.optString("title", "🛒 NUEVA VENTA — ML CENTRAL");
@@ -254,7 +303,10 @@ public class SaleListenerService extends Service {
     private String firstLine(String s) { if (s == null) return "Venta nueva"; int n = s.indexOf('\n'); return n > 0 ? s.substring(0, n) : s; }
 
     @Override public void onDestroy() {
-        running = false; SaleStore.setConnected(this, false); if (worker != null) worker.interrupt(); if (syncWorker != null) syncWorker.interrupt();
+        running = false; SaleStore.setConnected(this, false);
+        if (worker != null) worker.interrupt();
+        if (syncWorker != null) syncWorker.interrupt();
+        if (stateWorker != null) stateWorker.interrupt();
         try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
         super.onDestroy();
     }
