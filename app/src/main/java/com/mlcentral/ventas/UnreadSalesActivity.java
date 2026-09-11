@@ -32,53 +32,38 @@ public class UnreadSalesActivity extends Activity {
         refresh();
     }
 
-    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
-
     private void buildUi() {
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
-        outer.setPadding(dp(18), dp(20), dp(18), dp(18));
-        outer.setBackgroundColor(Color.rgb(248, 249, 250));
+        outer.setPadding(UiKit.dp(this, 18), UiKit.dp(this, 22), UiKit.dp(this, 18), UiKit.dp(this, 18));
+        outer.setBackgroundColor(UiKit.BG);
 
-        title = new TextView(this);
-        title.setTextSize(25);
-        title.setTextColor(Color.rgb(25, 25, 25));
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        title = UiKit.text(this, "Ventas nuevas", 28, UiKit.TEXT, true);
         outer.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Acá aparecen únicamente las ventas que todavía no confirmaste.");
-        subtitle.setTextSize(14);
-        subtitle.setTextColor(Color.DKGRAY);
-        subtitle.setPadding(0, dp(5), 0, dp(12));
+        TextView subtitle = UiKit.text(this, "Revisá lo pendiente y confirmalo una sola vez para todos tus celulares.", 14, UiKit.MUTED, false);
+        subtitle.setPadding(0, UiKit.dp(this, 4), 0, UiKit.dp(this, 14));
         outer.addView(subtitle);
 
         ScrollView scroll = new ScrollView(this);
-        sales = new TextView(this);
-        sales.setTextSize(16);
-        sales.setTextColor(Color.rgb(40, 40, 40));
+        LinearLayout card = UiKit.card(this);
+        sales = UiKit.text(this, "", 15, UiKit.TEXT, false);
         sales.setTextIsSelectable(true);
-        sales.setPadding(dp(4), dp(6), dp(4), dp(12));
-        scroll.addView(sales);
-        outer.addView(scroll, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        card.addView(sales);
+        scroll.addView(card);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        outer.addView(scroll, sp);
 
-        markRead = new Button(this);
-        markRead.setText("Marcar vistas en todos los celulares");
-        markRead.setAllCaps(false);
+        markRead = UiKit.button(this, "Marcar vistas en todos los celulares");
+        markRead.setTextColor(Color.WHITE);
+        markRead.setTypeface(null, android.graphics.Typeface.BOLD);
+        markRead.setBackground(UiKit.rounded(UiKit.ACCENT, 14, this));
         markRead.setOnClickListener(v -> confirmCurrentSales());
-        outer.addView(markRead, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+        outer.addView(markRead, UiKit.fullWidth(this, 14, 0));
 
-        Button back = new Button(this);
-        back.setText("Volver");
+        Button back = UiKit.button(this, "Volver al inicio");
         back.setOnClickListener(v -> finish());
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        bp.setMargins(0, dp(8), 0, 0);
-        outer.addView(back, bp);
+        outer.addView(back, UiKit.fullWidth(this, 8, 0));
 
         setContentView(outer);
     }
@@ -88,6 +73,7 @@ public class UnreadSalesActivity extends Activity {
         title.setText(n == 1 ? "1 venta nueva" : n + " ventas nuevas");
         sales.setText(SaleStore.unreadHistoryText(this));
         markRead.setEnabled(n > 0);
+        markRead.setAlpha(n > 0 ? 1f : 0.45f);
     }
 
     private void confirmCurrentSales() {
@@ -100,7 +86,7 @@ public class UnreadSalesActivity extends Activity {
         cancelNotifications(ids);
         ReadSync.acknowledgeAsync(this, ids);
         sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
-        Toast.makeText(this, "Ventas confirmadas. Se sincronizarán con los otros celulares.", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Ventas confirmadas y sincronizadas con los otros celulares.", Toast.LENGTH_LONG).show();
         refresh();
     }
 
