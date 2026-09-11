@@ -56,10 +56,10 @@ public final class ReadSync {
     public static void requestHistoryOnceAsync(Context context) {
         Context app = context.getApplicationContext();
         SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
-        if (p.getBoolean("full_history_restore_done_v2", false)) return;
+        if (p.getBoolean("full_history_restore_done_v3", false)) return;
 
         long now = System.currentTimeMillis();
-        long last = p.getLong("full_history_request_last_at_v2", 0L);
+        long last = p.getLong("full_history_request_last_at_v3", 0L);
         if (last > 0 && now - last < HISTORY_RETRY_MS) return;
 
         synchronized (ReadSync.class) {
@@ -69,13 +69,16 @@ public final class ReadSync {
 
         Thread t = new Thread(() -> {
             try {
-                String requestId = p.getString("full_history_request_id_v2", "");
-                if (requestId == null || requestId.trim().isEmpty()) {
-                    requestId = UUID.randomUUID().toString();
-                    p.edit().putString("full_history_request_id_v2", requestId).apply();
-                }
+                // Cada reintento usa un request_id NUEVO. Así, si el BEGIN/FIN anterior
+                // se perdió en la red, Windows no lo considera ya atendido y vuelve a
+                // enviar el historial completo.
+                String requestId = UUID.randomUUID().toString();
+                p.edit()
+                        .putString("full_history_request_id_v3", requestId)
+                        .putBoolean("full_history_restore_done_v3", false)
+                        .apply();
                 if (publishFullHistoryRequest(requestId)) {
-                    p.edit().putLong("full_history_request_last_at_v2", System.currentTimeMillis()).apply();
+                    p.edit().putLong("full_history_request_last_at_v3", System.currentTimeMillis()).apply();
                 }
             } finally {
                 requestingHistory = false;
@@ -118,7 +121,7 @@ public final class ReadSync {
             body.put("type", "read_sync_v1");
             body.put("ids", arr);
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.7 Android");
+            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.8 Android");
         } catch (Exception ignored) {
             return false;
         }
@@ -130,7 +133,7 @@ public final class ReadSync {
             body.put("type", "full_history_request_v2");
             body.put("request_id", requestId == null ? "" : requestId.trim());
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.7 Android");
+            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.8 Android");
         } catch (Exception ignored) {
             return false;
         }
