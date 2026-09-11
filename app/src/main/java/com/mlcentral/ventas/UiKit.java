@@ -88,17 +88,17 @@ public final class UiKit {
         LinearLayout nav = new LinearLayout(a);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
-        nav.setPadding(dp(a, 10), dp(a, 8), dp(a, 10), dp(a, 10));
+        nav.setPadding(dp(a, 8), dp(a, 8), dp(a, 8), dp(a, 10));
         nav.setBackground(roundedStroke(Color.WHITE, 0, BORDER, a));
 
-        String[] labels = {"Inicio", "Historial", "Configuración"};
-        Class<?>[] screens = {MainActivity.class, HistoryActivity.class, SettingsActivity.class};
+        String[] labels = {"Inicio", "Estados", "Historial", "Config."};
+        Class<?>[] screens = {MainActivity.class, StatusActivity.class, HistoryActivity.class, SettingsActivity.class};
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
             Button b = new Button(a);
             b.setText(labels[i]);
             b.setAllCaps(false);
-            b.setTextSize(14);
+            b.setTextSize(13);
             b.setMinHeight(dp(a, 48));
             b.setTextColor(i == selected ? ACCENT : MUTED);
             b.setTypeface(null, i == selected ? Typeface.BOLD : Typeface.NORMAL);
@@ -110,7 +110,7 @@ public final class UiKit {
                 a.startActivity(intent);
             });
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) p.setMargins(dp(a, 5), 0, 0, 0);
+            if (i > 0) p.setMargins(dp(a, 4), 0, 0, 0);
             nav.addView(b, p);
         }
         return nav;
