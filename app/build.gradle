@@ -10,7 +10,26 @@ android {
         applicationId 'com.mlcentral.ventas'
         minSdk 26
         targetSdk 33
-        versionCode 5
-        versionName '1.4'
+        versionCode 6
+        versionName '1.5'
+    }
+
+    signingConfigs {
+        stable {
+            def signingFile = System.getenv('MLC_SIGNING_FILE')
+            def signingPassword = System.getenv('MLC_SIGNING_PASSWORD')
+            if (signingFile != null && !signingFile.isEmpty()) {
+                storeFile file(signingFile)
+                storePassword signingPassword
+                keyAlias 'mlcentral'
+                keyPassword signingPassword
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.stable
+        }
     }
 }
