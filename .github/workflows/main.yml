@@ -38,38 +38,17 @@ jobs:
         run: |
           set -euo pipefail
           TOPIC=""
-
-          # Primer artefacto válido: contiene el mismo canal que usa ML Central v20.17.
           PINNED_ARTIFACT_ID="9993951669"
-          if curl -fsSL -L \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PINNED_ARTIFACT_ID}/zip" \
-            -o previous-topic.zip; then
+          if curl -fsSL -L -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PINNED_ARTIFACT_ID}/zip" -o previous-topic.zip; then
             TOPIC="$(unzip -p previous-topic.zip mlcentral_topic.txt 2>/dev/null | tr -d '\r\n' || true)"
           fi
-
-          # Cuando el primer artefacto expire, reutiliza el canal del último build disponible.
           if [ -z "$TOPIC" ]; then
-            ARTIFACT_ID="$(curl -fsSL \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=ML-Central-Ventas-APK&per_page=100" \
-              | python3 -c 'import json,sys; a=[x for x in json.load(sys.stdin).get("artifacts",[]) if not x.get("expired")]; print(a[0]["id"] if a else "")')"
-
-            if [ -n "$ARTIFACT_ID" ] && curl -fsSL -L \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
-              -o previous-topic.zip; then
+            ARTIFACT_ID="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=ML-Central-Ventas-APK&per_page=100" | python3 -c 'import json,sys; a=[x for x in json.load(sys.stdin).get("artifacts",[]) if not x.get("expired")]; print(a[0]["id"] if a else "")')"
+            if [ -n "$ARTIFACT_ID" ] && curl -fsSL -L -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" -o previous-topic.zip; then
               TOPIC="$(unzip -p previous-topic.zip mlcentral_topic.txt 2>/dev/null | tr -d '\r\n' || true)"
             fi
           fi
-
-          if [ -z "$TOPIC" ]; then
-            TOPIC="mlcentral-ventas-$(openssl rand -hex 20)"
-          fi
-
+          if [ -z "$TOPIC" ]; then TOPIC="mlcentral-ventas-$(openssl rand -hex 20)"; fi
           printf '%s\n' "$TOPIC" > mlcentral_topic.txt
           sed -i "s/__MLC_TOPIC__/$TOPIC/g" app/src/main/java/com/mlcentral/ventas/AppConfig.java
 
@@ -78,30 +57,17 @@ jobs:
         run: |
           mkdir -p app/src/main/res/raw
           python3 - <<'PY'
-          import wave
-          import math
-          import struct
-
+          import wave, math, struct
           rate = 44100
           duration = 0.65
-
           with wave.open("app/src/main/res/raw/sale_chime.wav", "w") as f:
-              f.setnchannels(1)
-              f.setsampwidth(2)
-              f.setframerate(rate)
-
+              f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
               data = []
               for i in range(int(rate * duration)):
                   t = i / rate
                   freq = 880 if t < 0.22 else 1320
                   envelope = max(0.0, 1.0 - t / duration)
-                  sample = int(
-                      15000 *
-                      math.sin(2 * math.pi * freq * t) *
-                      envelope
-                  )
-                  data.append(struct.pack("<h", sample))
-
+                  data.append(struct.pack("<h", int(15000 * math.sin(2 * math.pi * freq * t) * envelope)))
               f.writeframes(b"".join(data))
           PY
 
@@ -109,15 +75,13 @@ jobs:
         run: gradle assembleDebug --stacktrace
 
       - name: Preparar APK
-        shell: bash
-        run: |
-          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.2.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.3.apk
 
       - name: Guardar APK y configuración
         uses: actions/upload-artifact@v4
         with:
           name: ML-Central-Ventas-APK
           path: |
-            ML-Central-Ventas-v1.2.apk
+            ML-Central-Ventas-v1.3.apk
             mlcentral_topic.txt
           retention-days: 90
