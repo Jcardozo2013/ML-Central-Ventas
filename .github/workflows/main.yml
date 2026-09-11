@@ -31,7 +31,7 @@ jobs:
           path: ~/.android/debug.keystore
           key: mlcentral-ventas-stable-signing-v1
 
-      - name: Asegurar firma Android y verificar huella
+      - name: Asegurar firma Android y verificar huella de clave
         shell: bash
         run: |
           set -euo pipefail
@@ -48,15 +48,15 @@ jobs:
           CERT_SHA="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -rfc \
             | openssl x509 -noout -fingerprint -sha256 \
             | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-          printf '%s\n' "$CERT_SHA" > signing_sha256.txt
-          if [ -f signing_expected_sha256.txt ]; then
-            EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
-            if [ "$CERT_SHA" != "$EXPECTED" ]; then
-              echo "ERROR: la firma Android no coincide con la huella fija esperada."
-              exit 1
-            fi
+          EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
+          if [ "$CERT_SHA" != "$EXPECTED" ]; then
+            echo "ERROR: la clave recuperada no coincide con la firma fija esperada."
+            echo "Esperada: $EXPECTED"
+            echo "Recuperada: $CERT_SHA"
+            exit 1
           fi
-          echo "Firma APK SHA256: $CERT_SHA"
+          printf '%s\n' "$CERT_SHA" > signing_keystore_sha256.txt
+          echo "Clave estable SHA256: $CERT_SHA"
 
       - name: Recuperar canal privado existente
         shell: bash
@@ -113,19 +113,60 @@ jobs:
               f.writeframes(b"".join(data))
           PY2
 
-      - name: Compilar APK
-        run: gradle assembleDebug --stacktrace
+      - name: Compilar APK prueba 1
+        run: gradle clean assembleDebug --stacktrace
 
-      - name: Preparar APK
+      - name: Verificar firma APK prueba 1
         shell: bash
-        run: cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.7.apk
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.8-build1.apk
+          BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
+          APK_SHA_1="$($APKSIGNER verify --print-certs ML-Central-Ventas-v1.8-build1.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
+          test -n "$APK_SHA_1"
+          if [ "$APK_SHA_1" != "$EXPECTED" ]; then
+            echo "ERROR: el APK final NO usa la firma estable."
+            echo "Esperada: $EXPECTED"
+            echo "APK 1: $APK_SHA_1"
+            exit 1
+          fi
+          printf '%s\n' "$APK_SHA_1" > signing_apk_build1_sha256.txt
+
+      - name: Compilar APK prueba 2
+        run: gradle clean assembleDebug --stacktrace
+
+      - name: Verificar firma APK prueba 2 y preparar final
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.8.apk
+          BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
+          APK_SHA_2="$($APKSIGNER verify --print-certs ML-Central-Ventas-v1.8.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
+          APK_SHA_1="$(cat signing_apk_build1_sha256.txt | tr -d '\r\n :\t' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
+          if [ "$APK_SHA_2" != "$EXPECTED" ] || [ "$APK_SHA_2" != "$APK_SHA_1" ]; then
+            echo "ERROR: las dos compilaciones no tienen exactamente la firma esperada."
+            echo "Esperada: $EXPECTED"
+            echo "APK 1: $APK_SHA_1"
+            echo "APK 2: $APK_SHA_2"
+            exit 1
+          fi
+          printf '%s\n' "$APK_SHA_2" > signing_apk_final_sha256.txt
+          echo "APK v1.8 firma FINAL verificada: $APK_SHA_2"
 
       - name: Guardar APK y configuración
         uses: actions/upload-artifact@v4
         with:
           name: ML-Central-Ventas-APK
           path: |
-            ML-Central-Ventas-v1.7.apk
+            ML-Central-Ventas-v1.8.apk
             mlcentral_topic.txt
-            signing_sha256.txt
+            signing_keystore_sha256.txt
+            signing_apk_build1_sha256.txt
+            signing_apk_final_sha256.txt
           retention-days: 90
