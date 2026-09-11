@@ -22,94 +22,81 @@ public class SettingsActivity extends Activity {
         buildUi();
     }
 
-    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
-    private TextView text(String s, float size, int color) { TextView t = new TextView(this); t.setText(s); t.setTextSize(size); t.setTextColor(color); return t; }
-
     private void buildUi() {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(UiKit.BG);
+
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(24), dp(20), dp(30));
-        root.setBackgroundColor(Color.rgb(248, 249, 250));
+        root.setPadding(UiKit.dp(this, 18), UiKit.dp(this, 22), UiKit.dp(this, 18), UiKit.dp(this, 24));
         scroll.addView(root);
+        shell.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
-
-        Button back = new Button(this);
-        back.setText("←");
-        back.setTextSize(22);
-        back.setOnClickListener(v -> finish());
-        header.addView(back, new LinearLayout.LayoutParams(dp(58), dp(52)));
-
-        TextView title = text("⚙️ Configuración", 27, Color.rgb(25, 25, 25));
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        titleParams.setMargins(dp(8), 0, 0, 0);
-        header.addView(title, titleParams);
-        root.addView(header);
-
-        TextView subtitle = text("Conexión, pruebas y sonidos de ML Central Ventas", 15, Color.DKGRAY);
-        subtitle.setPadding(0, dp(8), 0, dp(18));
+        TextView title = UiKit.text(this, "Configuración", 28, UiKit.TEXT, true);
+        root.addView(title);
+        TextView subtitle = UiKit.text(this, "Conexión, pruebas y sonidos", 14, UiKit.MUTED, false);
+        subtitle.setPadding(0, UiKit.dp(this, 4), 0, UiKit.dp(this, 16));
         root.addView(subtitle);
 
-        TextView connectionLabel = text("CONEXIÓN", 13, Color.GRAY);
-        connectionLabel.setTypeface(null, android.graphics.Typeface.BOLD);
-        root.addView(connectionLabel);
-
-        Button reconnect = new Button(this);
-        reconnect.setText("Reconectar");
-        reconnect.setAllCaps(false);
+        root.addView(sectionTitle("CONEXIÓN"));
+        LinearLayout connection = UiKit.card(this);
+        TextView connText = UiKit.text(this, "Si el estado queda en reconectando, podés reiniciar el servicio sin cerrar la app.", 14, UiKit.MUTED, false);
+        connection.addView(connText);
+        Button reconnect = primaryButton("Reconectar ahora");
         reconnect.setOnClickListener(v -> reconnect());
-        LinearLayout.LayoutParams reconnectParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        reconnectParams.setMargins(0, dp(6), 0, dp(18));
-        root.addView(reconnect, reconnectParams);
+        connection.addView(reconnect, UiKit.fullWidth(this, 12, 0));
+        root.addView(connection, UiKit.fullWidth(this, 7, 18));
 
-        TextView salesLabel = text("VENTAS", 13, Color.GRAY);
-        salesLabel.setTypeface(null, android.graphics.Typeface.BOLD);
-        root.addView(salesLabel);
-
-        Button testSale = new Button(this);
-        testSale.setText("Probar aviso de venta");
-        testSale.setAllCaps(false);
+        root.addView(sectionTitle("VENTAS"));
+        LinearLayout sales = UiKit.card(this);
+        TextView salesText = UiKit.text(this, "Probá el aviso y elegí el sonido que querés usar cuando entre una venta nueva.", 14, UiKit.MUTED, false);
+        sales.addView(salesText);
+        Button testSale = UiKit.button(this, "Probar aviso de venta");
         testSale.setOnClickListener(v -> showSaleTest());
-        LinearLayout.LayoutParams testSaleParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        testSaleParams.setMargins(0, dp(6), 0, 0);
-        root.addView(testSale, testSaleParams);
-
-        Button toneSale = new Button(this);
-        toneSale.setText("🔊 Elegir sonido de ventas");
-        toneSale.setAllCaps(false);
+        sales.addView(testSale, UiKit.fullWidth(this, 12, 0));
+        Button toneSale = UiKit.button(this, "Elegir sonido de ventas");
         toneSale.setOnClickListener(v -> openChannelSettings(SaleListenerService.SALES_CHANNEL));
-        LinearLayout.LayoutParams toneSaleParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        toneSaleParams.setMargins(0, dp(8), 0, dp(18));
-        root.addView(toneSale, toneSaleParams);
+        sales.addView(toneSale, UiKit.fullWidth(this, 8, 0));
+        root.addView(sales, UiKit.fullWidth(this, 7, 18));
 
-        TextView deliveryLabel = text("ENTREGAS", 13, Color.GRAY);
-        deliveryLabel.setTypeface(null, android.graphics.Typeface.BOLD);
-        root.addView(deliveryLabel);
-
-        Button testDelivery = new Button(this);
-        testDelivery.setText("Probar aviso de entrega");
-        testDelivery.setAllCaps(false);
+        root.addView(sectionTitle("ENTREGAS"));
+        LinearLayout deliveries = UiKit.card(this);
+        TextView deliveryText = UiKit.text(this, "El aviso de paquete entregado usa un canal separado para que pueda tener otro sonido.", 14, UiKit.MUTED, false);
+        deliveries.addView(deliveryText);
+        Button testDelivery = UiKit.button(this, "Probar aviso de entrega");
         testDelivery.setOnClickListener(v -> showDeliveryTest());
-        LinearLayout.LayoutParams testDeliveryParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        testDeliveryParams.setMargins(0, dp(6), 0, 0);
-        root.addView(testDelivery, testDeliveryParams);
-
-        Button toneDelivery = new Button(this);
-        toneDelivery.setText("📦 Elegir sonido de entregas");
-        toneDelivery.setAllCaps(false);
+        deliveries.addView(testDelivery, UiKit.fullWidth(this, 12, 0));
+        Button toneDelivery = UiKit.button(this, "Elegir sonido de entregas");
         toneDelivery.setOnClickListener(v -> openChannelSettings(SaleListenerService.DELIVERY_CHANNEL));
-        LinearLayout.LayoutParams toneDeliveryParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        toneDeliveryParams.setMargins(0, dp(8), 0, dp(18));
-        root.addView(toneDelivery, toneDeliveryParams);
+        deliveries.addView(toneDelivery, UiKit.fullWidth(this, 8, 0));
+        root.addView(deliveries, UiKit.fullWidth(this, 7, 18));
 
-        TextView note = text("Los sonidos de ventas y entregas se configuran por separado desde Android.", 13, Color.GRAY);
-        root.addView(note);
+        LinearLayout info = UiKit.card(this);
+        TextView version = UiKit.text(this, "ML Central Ventas · v1.9", 14, UiKit.TEXT, true);
+        info.addView(version);
+        TextView note = UiKit.text(this, "Los sonidos se configuran desde Android y no afectan la sincronización con Windows.", 13, UiKit.MUTED, false);
+        note.setPadding(0, UiKit.dp(this, 7), 0, 0);
+        info.addView(note);
+        root.addView(info);
 
-        setContentView(scroll);
+        shell.addView(UiKit.bottomNav(this, 2), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        setContentView(shell);
+    }
+
+    private TextView sectionTitle(String value) {
+        TextView t = UiKit.text(this, value, 12, UiKit.MUTED, true);
+        t.setLetterSpacing(0.08f);
+        return t;
+    }
+
+    private Button primaryButton(String label) {
+        Button b = UiKit.button(this, label);
+        b.setTextColor(Color.WHITE);
+        b.setTypeface(null, android.graphics.Typeface.BOLD);
+        b.setBackground(UiKit.rounded(UiKit.ACCENT, 12, this));
+        return b;
     }
 
     private void reconnect() {
@@ -147,7 +134,7 @@ public class SettingsActivity extends Activity {
     private void showSaleTest() {
         Notification.Builder b = testBuilder(SaleListenerService.SALES_CHANNEL);
         b.setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("🛒 PRUEBA — NUEVA VENTA")
+                .setContentTitle("PRUEBA · NUEVA VENTA")
                 .setContentText("Prueba del sonido elegido para ventas.")
                 .setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nCantidad: 1\nVenta: $1.500\nEste es el canal de VENTAS."))
                 .setAutoCancel(true);
@@ -158,9 +145,9 @@ public class SettingsActivity extends Activity {
     private void showDeliveryTest() {
         Notification.Builder b = testBuilder(SaleListenerService.DELIVERY_CHANNEL);
         b.setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle("📦 PRUEBA — PAQUETE ENTREGADO")
+                .setContentTitle("PRUEBA · PAQUETE ENTREGADO")
                 .setContentText("Prueba del sonido elegido para entregas.")
-                .setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nOrden: 20000...\nEstado: ✅ Entregado\nEste es el canal de ENTREGAS."))
+                .setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nOrden: 20000...\nEstado: Entregado\nEste es el canal de ENTREGAS."))
                 .setAutoCancel(true);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL);
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(998, b.build());
