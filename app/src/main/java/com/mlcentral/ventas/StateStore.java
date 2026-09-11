@@ -19,6 +19,7 @@ public final class StateStore {
     private static final String ACTIVE_KEY = "state_snapshot_active_v1";
     private static final String LAST_SYNC_KEY = "state_last_sync_at_v1";
     private static final String LAST_STATUS_KEY = "state_last_status_v1";
+    private static final String LAST_STATUS_AT_KEY = "state_last_status_at_v1";
 
     private StateStore() {}
 
@@ -38,15 +39,17 @@ public final class StateStore {
         JSONObject active = object(p.getString(ACTIVE_KEY, "{}"));
         if (bid.equals(active.optString("batch_id", ""))) return;
         JSONObject next = new JSONObject();
+        long now = System.currentTimeMillis();
         try {
             next.put("batch_id", bid);
             next.put("total", Math.max(0, total));
             next.put("sales", new JSONObject());
-            next.put("started_at", System.currentTimeMillis());
+            next.put("started_at", now);
         } catch (Exception ignored) {}
         p.edit()
                 .putString(ACTIVE_KEY, next.toString())
-                .putString(LAST_STATUS_KEY, "Recibiendo estados 0/" + Math.max(0, total))
+                .putString(LAST_STATUS_KEY, "Estados PC: recibiendo 0/" + Math.max(0, total))
+                .putLong(LAST_STATUS_AT_KEY, now)
                 .apply();
     }
 
@@ -68,9 +71,11 @@ public final class StateStore {
         try { active.put("sales", sales); } catch (Exception ignored) {}
         int received = sales.length();
         int total = active.optInt("total", 0);
+        long now = System.currentTimeMillis();
         p.edit()
                 .putString(ACTIVE_KEY, active.toString())
-                .putString(LAST_STATUS_KEY, "Recibiendo estados " + received + "/" + total)
+                .putString(LAST_STATUS_KEY, "Estados PC: recibiendo " + received + "/" + total)
+                .putLong(LAST_STATUS_AT_KEY, now)
                 .apply();
         return received;
     }
@@ -84,17 +89,20 @@ public final class StateStore {
         if (sales == null) sales = new JSONObject();
         int expected = Math.max(0, total > 0 ? total : active.optInt("total", 0));
         int received = sales.length();
+        long now = System.currentTimeMillis();
         if (received < expected) {
-            p.edit().putString(LAST_STATUS_KEY,
-                    "Estados incompletos: " + received + "/" + expected + " · se reintentará").apply();
+            p.edit()
+                    .putString(LAST_STATUS_KEY, "Estados PC: incompletos " + received + "/" + expected + " · reintentando…")
+                    .putLong(LAST_STATUS_AT_KEY, now)
+                    .apply();
             return false;
         }
-        long now = System.currentTimeMillis();
         p.edit()
                 .putString(FINAL_KEY, sales.toString())
                 .putString(ACTIVE_KEY, "")
                 .putLong(LAST_SYNC_KEY, now)
                 .putString(LAST_STATUS_KEY, "Estados sincronizados: " + received)
+                .putLong(LAST_STATUS_AT_KEY, now)
                 .apply();
         return true;
     }
@@ -106,7 +114,8 @@ public final class StateStore {
         SharedPreferences p = prefs(c);
         JSONObject all = object(p.getString(FINAL_KEY, "{}"));
         try { all.put(oid, state); } catch (Exception ignored) {}
-        p.edit().putString(FINAL_KEY, all.toString()).putLong(LAST_SYNC_KEY, System.currentTimeMillis()).apply();
+        long now = System.currentTimeMillis();
+        p.edit().putString(FINAL_KEY, all.toString()).putLong(LAST_SYNC_KEY, now).apply();
     }
 
     public static synchronized List<JSONObject> allSales(Context c) {
@@ -164,15 +173,20 @@ public final class StateStore {
     public static String statusText(Context c) {
         SharedPreferences p = prefs(c);
         String status = p.getString(LAST_STATUS_KEY, "");
-        long at = p.getLong(LAST_SYNC_KEY, 0L);
-        if (at > 0) {
-            String time = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(at));
+        long statusAt = p.getLong(LAST_STATUS_AT_KEY, 0L);
+        long syncAt = p.getLong(LAST_SYNC_KEY, 0L);
+        if (status != null && !status.trim().isEmpty() && statusAt > syncAt) return status;
+        if (syncAt > 0) {
+            String time = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(syncAt));
             return "Estados PC: " + total(c) + " ventas · " + time;
         }
         return status == null || status.trim().isEmpty() ? "Estados PC: esperando sincronización…" : status;
     }
 
     public static void setStatus(Context c, String text) {
-        prefs(c).edit().putString(LAST_STATUS_KEY, text == null ? "" : text).apply();
+        prefs(c).edit()
+                .putString(LAST_STATUS_KEY, text == null ? "" : text)
+                .putLong(LAST_STATUS_AT_KEY, System.currentTimeMillis())
+                .apply();
     }
 }
