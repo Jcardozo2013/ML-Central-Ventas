@@ -120,10 +120,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.8-build1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.9-build1.apk
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.8-build1.apk 2>&1 | tee apksigner-build1.txt
+          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.9-build1.apk 2>&1 | tee apksigner-build1.txt
           APK_SHA_1="$(grep -i 'certificate SHA-256 digest' apksigner-build1.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
           if [ -z "$APK_SHA_1" ]; then
@@ -147,10 +147,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ML-Central-Ventas-v1.9.apk
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.8.apk 2>&1 | tee apksigner-build2.txt
+          "$APKSIGNER" verify --print-certs ML-Central-Ventas-v1.9.apk 2>&1 | tee apksigner-build2.txt
           APK_SHA_2="$(grep -i 'certificate SHA-256 digest' apksigner-build2.txt | head -1 | awk -F': ' '{print $NF}' | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]')"
           APK_SHA_1="$(cat signing_apk_build1_sha256.txt | tr -d '\r\n :\t' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(tr -d '\r\n :\t' < signing_expected_sha256.txt | tr '[:lower:]' '[:upper:]')"
@@ -162,14 +162,14 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$APK_SHA_2" > signing_apk_final_sha256.txt
-          echo "APK v1.8 firma FINAL verificada: $APK_SHA_2"
+          echo "APK v1.9 firma FINAL verificada: $APK_SHA_2"
 
       - name: Guardar APK y configuración
         uses: actions/upload-artifact@v4
         with:
           name: ML-Central-Ventas-APK
           path: |
-            ML-Central-Ventas-v1.8.apk
+            ML-Central-Ventas-v1.9.apk
             mlcentral_topic.txt
             signing_keystore_sha256.txt
             signing_apk_build1_sha256.txt
