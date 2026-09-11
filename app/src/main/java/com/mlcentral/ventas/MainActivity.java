@@ -22,6 +22,7 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     private TextView status;
+    private TextView historyStatus;
     private Button unread;
     private TextView todaySales;
     private TextView todayProfit;
@@ -31,6 +32,7 @@ public class MainActivity extends Activity {
     private final Runnable historyRetry = new Runnable() {
         @Override public void run() {
             ReadSync.requestHistoryOnceAsync(MainActivity.this);
+            refresh();
             handler.postDelayed(this, 120000L);
         }
     };
@@ -89,8 +91,12 @@ public class MainActivity extends Activity {
 
         status = text("● Conectando…", 16, Color.rgb(180, 90, 0));
         status.setTypeface(null, android.graphics.Typeface.BOLD);
-        status.setPadding(0, dp(12), 0, dp(4));
+        status.setPadding(0, dp(12), 0, dp(2));
         root.addView(status);
+
+        historyStatus = text("Historial: esperando sincronización con Windows…", 14, Color.DKGRAY);
+        historyStatus.setPadding(0, dp(2), 0, dp(6));
+        root.addView(historyStatus);
 
         unread = new Button(this);
         unread.setText("0 ventas nuevas"); unread.setTextSize(18); unread.setAllCaps(false);
@@ -138,6 +144,7 @@ public class MainActivity extends Activity {
         String time = at > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at)) : "";
         status.setText(c ? "● Conectado · " + time : "● Reconectando…");
         status.setTextColor(c ? Color.rgb(27, 94, 32) : Color.rgb(180, 90, 0));
+        historyStatus.setText(HistoryRestore.statusText(this));
         todaySales.setText("Ventas hoy: " + SaleStore.todaySaleCount(this));
         todayProfit.setText("Ganancia hoy: " + SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
         monthProfit.setText("Ganancia del mes: " + SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
