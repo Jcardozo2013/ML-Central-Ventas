@@ -17,6 +17,7 @@ import java.util.List;
 public final class ReadSync {
     public static final String TITLE = "MLC_READ_SYNC_V1";
     public static final String HISTORY_REQUEST_TITLE = "MLC_HISTORY_REQUEST_V1";
+    private static final long HISTORY_RETRY_MS = 120000L;
     private static volatile boolean sending = false;
     private static volatile boolean requestingHistory = false;
 
@@ -53,14 +54,19 @@ public final class ReadSync {
     public static void requestHistoryOnceAsync(Context context) {
         Context app = context.getApplicationContext();
         SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
-        if (p.getBoolean("history_request_sent_v1", false)) return;
+        if (p.getBoolean("history_restore_done_v1", false)) return;
+        long now = System.currentTimeMillis();
+        long last = p.getLong("history_request_last_at_v1", 0L);
+        if (last > 0 && now - last < HISTORY_RETRY_MS) return;
         synchronized (ReadSync.class) {
             if (requestingHistory) return;
             requestingHistory = true;
         }
         Thread t = new Thread(() -> {
             try {
-                if (publishHistoryRequest()) p.edit().putBoolean("history_request_sent_v1", true).apply();
+                if (publishHistoryRequest()) {
+                    p.edit().putLong("history_request_last_at_v1", System.currentTimeMillis()).apply();
+                }
             } finally {
                 requestingHistory = false;
             }
