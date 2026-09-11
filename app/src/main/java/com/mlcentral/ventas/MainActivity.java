@@ -2,8 +2,6 @@ package com.mlcentral.ventas;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.Notification;
-import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -13,7 +11,6 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.provider.Settings;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -63,9 +60,21 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(248, 249, 250));
         scroll.addView(root);
 
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
         TextView title = text("ML Central Ventas", 28, Color.rgb(25, 25, 25));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
-        root.addView(title);
+        header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Button settings = new Button(this);
+        settings.setText("⚙️");
+        settings.setTextSize(22);
+        settings.setAllCaps(false);
+        settings.setContentDescription("Configuración");
+        settings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
+        header.addView(settings, new LinearLayout.LayoutParams(dp(58), dp(52)));
+        root.addView(header);
+
         TextView subtitle = text("Ventas, ganancias y entregas sincronizadas con ML Central", 15, Color.DKGRAY);
         subtitle.setPadding(0, dp(4), 0, dp(12));
         root.addView(subtitle);
@@ -96,49 +105,21 @@ public class MainActivity extends Activity {
         monthProfit = statCard("Ganancia del mes: $0,00");
         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); mp.setMargins(0, dp(8), 0, dp(16)); root.addView(monthProfit, mp);
 
-        TextView h = text("Ventas de hoy", 21, Color.rgb(30, 30, 30)); h.setTypeface(null, android.graphics.Typeface.BOLD); h.setPadding(0, dp(4), 0, dp(8)); root.addView(h);
-        todayHistory = text("Todavía no hay ventas recibidas hoy.", 15, Color.rgb(45, 45, 45)); todayHistory.setTextIsSelectable(true); root.addView(todayHistory);
+        TextView h = text("Ventas de hoy", 21, Color.rgb(30, 30, 30));
+        h.setTypeface(null, android.graphics.Typeface.BOLD);
+        h.setPadding(0, dp(4), 0, dp(8));
+        root.addView(h);
+        todayHistory = text("Todavía no hay ventas recibidas hoy.", 15, Color.rgb(45, 45, 45));
+        todayHistory.setTextIsSelectable(true);
+        root.addView(todayHistory);
 
-        TextView line = new TextView(this); line.setBackgroundColor(Color.LTGRAY);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)); lp.setMargins(0, dp(18), 0, dp(12)); root.addView(line, lp);
-
-        Button restart = new Button(this); restart.setText("Reconectar");
-        restart.setOnClickListener(v -> { stopService(new Intent(this, SaleListenerService.class)); handler.postDelayed(this::startListener, 700); });
-        root.addView(restart, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        Button testSale = new Button(this); testSale.setText("Probar aviso de venta"); testSale.setOnClickListener(v -> showSaleTest());
-        LinearLayout.LayoutParams tsp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tsp.setMargins(0, dp(10), 0, 0); root.addView(testSale, tsp);
-
-        Button toneSale = new Button(this); toneSale.setText("🔊 Elegir sonido de ventas"); toneSale.setAllCaps(false); toneSale.setOnClickListener(v -> openChannelSettings(SaleListenerService.SALES_CHANNEL));
-        LinearLayout.LayoutParams tsp2 = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tsp2.setMargins(0, dp(8), 0, 0); root.addView(toneSale, tsp2);
-
-        Button testDelivery = new Button(this); testDelivery.setText("Probar aviso de entrega"); testDelivery.setOnClickListener(v -> showDeliveryTest());
-        LinearLayout.LayoutParams tdp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tdp.setMargins(0, dp(12), 0, 0); root.addView(testDelivery, tdp);
-
-        Button toneDelivery = new Button(this); toneDelivery.setText("📦 Elegir sonido de entregas"); toneDelivery.setAllCaps(false); toneDelivery.setOnClickListener(v -> openChannelSettings(SaleListenerService.DELIVERY_CHANNEL));
-        LinearLayout.LayoutParams tdp2 = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tdp2.setMargins(0, dp(8), 0, dp(10)); root.addView(toneDelivery, tdp2);
-
-        root.addView(text("Al instalar la app, solicita a ML Central Windows el historial del mes actual para reconstruir ventas y ganancias sin generar avisos nuevos.", 13, Color.GRAY));
         setContentView(scroll);
     }
 
-    private void openChannelSettings(String channelId) {
-        try {
-            Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS);
-            i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
-            i.putExtra(Settings.EXTRA_CHANNEL_ID, channelId);
-            startActivity(i);
-        } catch (Exception e) {
-            try {
-                Intent fallback = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-                fallback.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
-                startActivity(fallback);
-            } catch (Exception ignored) {}
-        }
-    }
-
     private void requestNotificationsIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 500);
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 500);
+        }
     }
 
     private void startListener() {
@@ -150,32 +131,17 @@ public class MainActivity extends Activity {
 
     private void refresh() {
         int n = SaleStore.unread(this);
-        unread.setText(n == 1 ? "1 venta nueva · VER" : n + " ventas nuevas · VER"); unread.setEnabled(n > 0);
-        boolean c = SaleStore.connected(this); long at = SaleStore.connectedAt(this);
+        unread.setText(n == 1 ? "1 venta nueva · VER" : n + " ventas nuevas · VER");
+        unread.setEnabled(n > 0);
+        boolean c = SaleStore.connected(this);
+        long at = SaleStore.connectedAt(this);
         String time = at > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at)) : "";
-        status.setText(c ? "● Conectado · " + time : "● Reconectando…"); status.setTextColor(c ? Color.rgb(27, 94, 32) : Color.rgb(180, 90, 0));
+        status.setText(c ? "● Conectado · " + time : "● Reconectando…");
+        status.setTextColor(c ? Color.rgb(27, 94, 32) : Color.rgb(180, 90, 0));
         todaySales.setText("Ventas hoy: " + SaleStore.todaySaleCount(this));
         todayProfit.setText("Ganancia hoy: " + SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
         monthProfit.setText("Ganancia del mes: " + SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
         todayHistory.setText(SaleStore.todayHistoryText(this));
-    }
-
-    private Notification.Builder testBuilder(String channelId) {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? new Notification.Builder(this, channelId) : new Notification.Builder(this);
-    }
-
-    private void showSaleTest() {
-        Notification.Builder b = testBuilder(SaleListenerService.SALES_CHANNEL);
-        b.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("🛒 PRUEBA — NUEVA VENTA").setContentText("Prueba del sonido elegido para ventas.").setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nCantidad: 1\nVenta: $1.500\nEste es el canal de VENTAS.")).setAutoCancel(true);
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_MAX).setDefaults(Notification.DEFAULT_ALL);
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(999, b.build());
-    }
-
-    private void showDeliveryTest() {
-        Notification.Builder b = testBuilder(SaleListenerService.DELIVERY_CHANNEL);
-        b.setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("📦 PRUEBA — PAQUETE ENTREGADO").setContentText("Prueba del sonido elegido para entregas.").setStyle(new Notification.BigTextStyle().bigText("Producto de prueba\nOrden: 20000...\nEstado: ✅ Entregado\nEste es el canal de ENTREGAS.")).setAutoCancel(true);
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL);
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(998, b.build());
     }
 
     @Override protected void onStart() {
@@ -185,10 +151,16 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(historyRetry);
         handler.post(historyRetry);
     }
+
     @Override protected void onStop() {
         handler.removeCallbacks(historyRetry);
         try { unregisterReceiver(saleReceiver); } catch (Exception ignored) {}
         super.onStop();
     }
-    @Override protected void onResume() { super.onResume(); ReadSync.requestHistoryOnceAsync(this); refresh(); }
+
+    @Override protected void onResume() {
+        super.onResume();
+        ReadSync.requestHistoryOnceAsync(this);
+        refresh();
+    }
 }
