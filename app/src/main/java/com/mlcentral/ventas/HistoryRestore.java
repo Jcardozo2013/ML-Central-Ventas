@@ -9,15 +9,20 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public final class HistoryRestore {
     private static final int MAX_HISTORY = 5000;
     private static final long ACTIVE_STALE_MS = 10 * 60 * 1000L;
+
+    // v1.22: durante una restauración completa juntamos las ventas en memoria
+    // y escribimos el historial una sola vez al final. Esto evita reconstruir
+    // y guardar 90+ veces el mismo JSON en celulares lentos.
+    private static final Map<String, JSONObject> fullBuffer = new LinkedHashMap<>();
+    private static String fullBufferRequestId = "";
+
     private HistoryRestore() {}
 
     private static SharedPreferences prefs(Context context) {
@@ -55,6 +60,11 @@ public final class HistoryRestore {
         String wanted = orderId.trim();
         byId.put(wanted, makeItem(wanted, display, saleUnix));
 
+        writeSortedHistory(p, byId);
+        SaleStore.markSeen(app, wanted);
+    }
+
+    private static void writeSortedHistory(SharedPreferences p, Map<String, JSONObject> byId) {
         List<JSONObject> items = new ArrayList<>(byId.values());
         Collections.sort(items, new Comparator<JSONObject>() {
             @Override public int compare(JSONObject a, JSONObject b) {
@@ -67,7 +77,6 @@ public final class HistoryRestore {
         JSONArray out = new JSONArray();
         for (int i = 0; i < items.size() && i < MAX_HISTORY; i++) out.put(items.get(i));
         p.edit().putString("history", out.toString()).apply();
-        SaleStore.markSeen(app, wanted);
     }
 
     public static void upsert(Context context, String orderId, String display, long saleUnix) {
@@ -82,11 +91,11 @@ public final class HistoryRestore {
 
         String wanted = p.getString("full_history_request_id_v3", "");
         if (wanted != null && !wanted.trim().isEmpty() && !wanted.trim().equals(rid)) {
-            return; // BEGIN viejo o de otro reintento: no reiniciar el progreso actual.
+            return;
         }
 
         if (p.getBoolean("full_history_restore_done_v3", false)) {
-            return; // Restauración ya terminada: ignorar BEGIN duplicados que quedaron en el canal.
+            return;
         }
 
         String active = p.getString("full_history_active_request_v3", "");
@@ -95,50 +104,73 @@ public final class HistoryRestore {
 
         if (active != null && !active.trim().isEmpty()) {
             if (active.trim().equals(rid)) {
-                return; // Mismo BEGIN repetido: conservar contador e IDs recibidos.
+                return;
             }
             if (startedAt > 0L && now - startedAt < ACTIVE_STALE_MS) {
-                return; // Ya hay una restauración válida en curso.
+                return;
             }
         }
+
+        fullBuffer.clear();
+        fullBufferRequestId = rid;
 
         p.edit()
                 .putString("full_history_active_request_v3", rid)
                 .putLong("full_history_started_at_v3", now)
                 .putInt("full_history_expected_v3", Math.max(0, expected))
                 .putInt("full_history_received_v3", 0)
-                .putStringSet("full_history_received_ids_v3", new HashSet<>())
                 .putBoolean("full_history_restore_done_v3", false)
                 .apply();
     }
 
-    public static void upsertFull(Context context, String requestId, String orderId, String display, long saleUnix) {
+    public static synchronized void upsertFull(Context context, String requestId, String orderId, String display, long saleUnix) {
+        SharedPreferences p = prefs(context);
+        String active = p.getString("full_history_active_request_v3", "");
+        String rid = requestId == null ? "" : requestId.trim();
+        if (active != null && !active.trim().isEmpty() && !active.trim().equals(rid)) return;
+
+        String oid = orderId == null ? "" : orderId.trim();
+        if (oid.isEmpty()) return;
+
+        if (!rid.equals(fullBufferRequestId)) {
+            fullBuffer.clear();
+            fullBufferRequestId = rid;
+        }
+
+        fullBuffer.put(oid, makeItem(oid, display, saleUnix));
+        p.edit().putInt("full_history_received_v3", fullBuffer.size()).apply();
+    }
+
+    public static synchronized void completeFullRestore(Context context, String requestId, int total) {
         Context app = context.getApplicationContext();
         SharedPreferences p = prefs(app);
         String active = p.getString("full_history_active_request_v3", "");
         String rid = requestId == null ? "" : requestId.trim();
         if (active != null && !active.trim().isEmpty() && !active.trim().equals(rid)) return;
-        String oid = orderId == null ? "" : orderId.trim();
-        if (oid.isEmpty()) return;
-        upsertInternal(app, oid, display, saleUnix);
-        Set<String> ids = new HashSet<>(p.getStringSet("full_history_received_ids_v3", new HashSet<>()));
-        ids.add(oid);
-        p.edit()
-                .putStringSet("full_history_received_ids_v3", ids)
-                .putInt("full_history_received_v3", ids.size())
-                .apply();
-    }
 
-    public static void completeFullRestore(Context context, String requestId, int total) {
-        SharedPreferences p = prefs(context);
-        String active = p.getString("full_history_active_request_v3", "");
-        String rid = requestId == null ? "" : requestId.trim();
-        if (active != null && !active.trim().isEmpty() && !active.trim().equals(rid)) return;
+        Map<String, JSONObject> byId = new LinkedHashMap<>();
+        try {
+            JSONArray old = new JSONArray(p.getString("history", "[]"));
+            for (int i = 0; i < old.length(); i++) {
+                JSONObject o = old.optJSONObject(i);
+                if (o == null) continue;
+                String sid = o.optString("saleId", "").trim();
+                if (!sid.isEmpty() && !byId.containsKey(sid)) byId.put(sid, o);
+            }
+        } catch (Exception ignored) {}
+
+        if (rid.equals(fullBufferRequestId)) {
+            byId.putAll(fullBuffer);
+        }
+        writeSortedHistory(p, byId);
+
         int expected = Math.max(0, total);
-        int received = p.getInt("full_history_received_v3", 0);
+        int received = rid.equals(fullBufferRequestId) ? fullBuffer.size() : p.getInt("full_history_received_v3", 0);
         boolean complete = expected == 0 || received >= expected;
+
         SharedPreferences.Editor e = p.edit()
                 .putInt("full_history_expected_v3", expected)
+                .putInt("full_history_received_v3", received)
                 .putBoolean("full_history_restore_done_v3", complete)
                 .putLong("full_history_completed_at_v3", complete ? System.currentTimeMillis() : 0L);
         if (complete) {
@@ -146,6 +178,11 @@ public final class HistoryRestore {
                     .putLong("full_history_started_at_v3", 0L);
         }
         e.apply();
+
+        if (complete) {
+            fullBuffer.clear();
+            fullBufferRequestId = "";
+        }
     }
 
     private static int historyCount(Context context) {
