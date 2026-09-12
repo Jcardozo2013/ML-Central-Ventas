@@ -11,26 +11,31 @@ import android.os.Build;
  * Nombre conservado para no cambiar el componente Android existente.
  * Desde v1.20 la implementación real usa Firebase Realtime Database.
  *
- * v1.24: Android exige que un servicio iniciado con startForegroundService()
- * llame startForeground() casi inmediatamente. Hacemos un bootstrap mínimo
- * antes de inicializar Firebase para evitar ForegroundServiceDidNotStartInTimeException
- * después de actualizar/reiniciar la APK.
+ * v1.26: Android exige que un servicio iniciado con startForegroundService()
+ * llame startForeground() casi inmediatamente. Lo hacemos tanto en onCreate()
+ * como en onStartCommand() para cubrir también reinicios rápidos del servicio.
  */
 public class SaleListenerService extends FirebaseListenerService {
     private static final int FOREGROUND_ID = 7;
 
     @Override public void onCreate() {
-        // El Service ya está adjunto al contexto cuando Android invoca onCreate().
-        // Subimos a foreground ANTES de cualquier inicialización de Firebase.
+        // Subimos a foreground antes de cualquier inicialización de Firebase.
         startForegroundBootstrap();
         super.onCreate();
+    }
+
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        // Importante: en algunos Android/MIUI puede llegar un nuevo start sin
+        // recrear el Service. Volvemos a confirmar foreground inmediatamente.
+        startForegroundBootstrap();
+        return super.onStartCommand(intent, flags, startId);
     }
 
     private void startForegroundBootstrap() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 NotificationManager nm = getSystemService(NotificationManager.class);
-                if (nm != null && nm.getNotificationChannel(SERVICE_CHANNEL) == null) {
+                if (nm != null) {
                     NotificationChannel channel = new NotificationChannel(
                             SERVICE_CHANNEL,
                             "Servicio ML Central",
@@ -57,15 +62,24 @@ public class SaleListenerService extends FirebaseListenerService {
             Notification notification = builder
                     .setSmallIcon(android.R.drawable.ic_dialog_info)
                     .setContentTitle("ML Central Ventas activo")
-                    .setContentText("Iniciando conexión…")
+                    .setContentText("Conectando con Firebase…")
                     .setOngoing(true)
                     .setOnlyAlertOnce(true)
                     .setContentIntent(pi)
                     .build();
 
             startForeground(FOREGROUND_ID, notification);
-        } catch (Exception ignored) {
-            // El padre vuelve a intentarlo con la notificación normal.
+            getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE)
+                    .edit()
+                    .remove("foreground_bootstrap_error")
+                    .apply();
+        } catch (Throwable e) {
+            try {
+                getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE)
+                        .edit()
+                        .putString("foreground_bootstrap_error", String.valueOf(e))
+                        .apply();
+            } catch (Throwable ignored) {}
         }
     }
 }
