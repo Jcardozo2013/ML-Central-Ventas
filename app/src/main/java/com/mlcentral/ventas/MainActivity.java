@@ -328,7 +328,6 @@ public class MainActivity extends Activity {
     private void startListener() {
         Intent i = new Intent(this, SaleListenerService.class);
         try {
-            stopService(i);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
             else startService(i);
         } catch (Exception ignored) {}
