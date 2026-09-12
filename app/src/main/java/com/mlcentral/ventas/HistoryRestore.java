@@ -17,6 +17,7 @@ import java.util.Set;
 
 public final class HistoryRestore {
     private static final int MAX_HISTORY = 5000;
+    private static final long ACTIVE_STALE_MS = 10 * 60 * 1000L;
     private HistoryRestore() {}
 
     private static SharedPreferences prefs(Context context) {
@@ -74,11 +75,36 @@ public final class HistoryRestore {
         prefs(context).edit().putBoolean("history_restore_done_v1", true).apply();
     }
 
-    public static void beginFullRestore(Context context, String requestId, int expected) {
+    public static synchronized void beginFullRestore(Context context, String requestId, int expected) {
         SharedPreferences p = prefs(context);
         String rid = requestId == null ? "" : requestId.trim();
+        if (rid.isEmpty()) return;
+
+        String wanted = p.getString("full_history_request_id_v3", "");
+        if (wanted != null && !wanted.trim().isEmpty() && !wanted.trim().equals(rid)) {
+            return; // BEGIN viejo o de otro reintento: no reiniciar el progreso actual.
+        }
+
+        if (p.getBoolean("full_history_restore_done_v3", false)) {
+            return; // Restauración ya terminada: ignorar BEGIN duplicados que quedaron en el canal.
+        }
+
+        String active = p.getString("full_history_active_request_v3", "");
+        long startedAt = p.getLong("full_history_started_at_v3", 0L);
+        long now = System.currentTimeMillis();
+
+        if (active != null && !active.trim().isEmpty()) {
+            if (active.trim().equals(rid)) {
+                return; // Mismo BEGIN repetido: conservar contador e IDs recibidos.
+            }
+            if (startedAt > 0L && now - startedAt < ACTIVE_STALE_MS) {
+                return; // Ya hay una restauración válida en curso.
+            }
+        }
+
         p.edit()
                 .putString("full_history_active_request_v3", rid)
+                .putLong("full_history_started_at_v3", now)
                 .putInt("full_history_expected_v3", Math.max(0, expected))
                 .putInt("full_history_received_v3", 0)
                 .putStringSet("full_history_received_ids_v3", new HashSet<>())
@@ -115,7 +141,10 @@ public final class HistoryRestore {
                 .putInt("full_history_expected_v3", expected)
                 .putBoolean("full_history_restore_done_v3", complete)
                 .putLong("full_history_completed_at_v3", complete ? System.currentTimeMillis() : 0L);
-        if (complete) e.putString("full_history_active_request_v3", "");
+        if (complete) {
+            e.putString("full_history_active_request_v3", "")
+                    .putLong("full_history_started_at_v3", 0L);
+        }
         e.apply();
     }
 
