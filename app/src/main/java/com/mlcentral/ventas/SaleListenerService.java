@@ -2,7 +2,7 @@ package com.mlcentral.ventas;
 
 /**
  * Nombre conservado para no cambiar el componente Android existente.
- * La implementación real vive en CloudflareListenerService.
+ * Desde v1.20 la implementación real usa Firebase Realtime Database.
  */
-public class SaleListenerService extends CloudflareListenerService {
+public class SaleListenerService extends FirebaseListenerService {
 }
