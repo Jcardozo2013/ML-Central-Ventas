@@ -115,7 +115,7 @@ public final class StateSync {
         catch (Exception e) { return new JSONArray(); }
     }
 
-    public static synchronized String queueAction(Context context, String orderId, String action, String expectedStage) {
+    private static synchronized String queueCommand(Context context, String orderId, String action, String expectedStage, String eventId) {
         Context app = context.getApplicationContext();
         String oid = orderId == null ? "" : orderId.trim();
         String act = action == null ? "" : action.trim();
@@ -133,6 +133,7 @@ public final class StateSync {
             cmd.put("order_id", oid);
             cmd.put("action", act);
             cmd.put("expected_stage", expectedStage == null ? "" : expectedStage.trim());
+            if (eventId != null && !eventId.trim().isEmpty()) cmd.put("event_id", eventId.trim());
             cmd.put("at", System.currentTimeMillis() / 1000L);
             old.put(cmd);
         } catch (Exception ignored) {}
@@ -140,6 +141,14 @@ public final class StateSync {
         StateStore.setStatus(app, "Cambio pendiente de confirmar en la PC");
         flushPendingAsync(app);
         return commandId;
+    }
+
+    public static synchronized String queueAction(Context context, String orderId, String action, String expectedStage) {
+        return queueCommand(context, orderId, action, expectedStage, "");
+    }
+
+    public static synchronized String queueUndo(Context context, String eventId, String orderId, String expectedStage) {
+        return queueCommand(context, orderId, "undo_state_change", expectedStage, eventId);
     }
 
     public static void flushPendingAsync(Context context) {
