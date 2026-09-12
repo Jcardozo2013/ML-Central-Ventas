@@ -88,6 +88,9 @@ public class StatusActivity extends Activity {
             refresh();
         });
         statusCard.addView(sync, UiKit.fullWidth(this, 12, 0));
+        Button movements = UiKit.button(this, "Movimientos / Deshacer");
+        movements.setOnClickListener(v -> startActivity(new Intent(this, MovementHistoryActivity.class)));
+        statusCard.addView(movements, UiKit.fullWidth(this, 8, 0));
         root.addView(statusCard, UiKit.fullWidth(this, 0, 16));
 
         TextView stageTitle = UiKit.text(this, "Flujo de ventas", 20, UiKit.TEXT, true);
