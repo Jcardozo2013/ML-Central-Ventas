@@ -2,6 +2,7 @@ package com.mlcentral.ventas;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -12,11 +13,17 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.text.InputType;
 import android.view.Gravity;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -37,12 +44,16 @@ public class MainActivity extends Activity {
     private TextView delivered;
     private TextView todayHistory;
     private final Handler handler = new Handler();
+    private boolean loginDialogShowing = false;
+    private boolean syncStarted = false;
 
     private final Runnable historyRetry = new Runnable() {
         @Override public void run() {
-            ReadSync.requestHistoryOnceAsync(MainActivity.this);
-            StateSync.requestSnapshotAsync(MainActivity.this, false);
-            StateSync.flushPendingAsync(MainActivity.this);
+            if (FirebaseTransport.signedIn(MainActivity.this)) {
+                ReadSync.requestHistoryOnceAsync(MainActivity.this);
+                StateSync.requestSnapshotAsync(MainActivity.this, false);
+                StateSync.flushPendingAsync(MainActivity.this);
+            }
             refresh();
             handler.postDelayed(this, 120000L);
         }
@@ -54,13 +65,99 @@ public class MainActivity extends Activity {
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        FirebaseConfig.ensureInitialized(this);
         buildUi();
         requestNotificationsIfNeeded();
-        startListener();
-        ReadSync.requestHistoryOnceAsync(this);
-        StateSync.requestSnapshotAsync(this, false);
-        StateSync.flushPendingAsync(this);
+        ensureFirebaseLogin();
         refresh();
+    }
+
+    private void ensureFirebaseLogin() {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user != null && FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
+            startAfterLogin();
+            return;
+        }
+        if (user != null) FirebaseAuth.getInstance().signOut();
+        showFirebaseLogin();
+    }
+
+    private void showFirebaseLogin() {
+        if (loginDialogShowing || isFinishing()) return;
+        loginDialogShowing = true;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = UiKit.dp(this, 18);
+        box.setPadding(pad, UiKit.dp(this, 8), pad, 0);
+
+        EditText email = new EditText(this);
+        email.setHint("Correo de Firebase");
+        email.setSingleLine(true);
+        email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        email.setText(getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).getString("firebase_login_email", ""));
+        box.addView(email, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText password = new EditText(this);
+        password.setHint("Contraseña de Firebase");
+        password.setSingleLine(true);
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pp.setMargins(0, UiKit.dp(this, 8), 0, 0);
+        box.addView(password, pp);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("Conectar ML Central con Firebase")
+                .setMessage("Ingresá el mismo correo y contraseña que configuraste en Firebase. Se guarda la sesión, no la contraseña.")
+                .setView(box)
+                .setNegativeButton("Después", null)
+                .setPositiveButton("Conectar", null)
+                .create();
+
+        dlg.setOnShowListener(x -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String mail = email.getText().toString().trim();
+            String pass = password.getText().toString();
+            if (mail.isEmpty() || pass.isEmpty()) {
+                Toast.makeText(this, "Ingresá correo y contraseña", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+            FirebaseAuth.getInstance().signInWithEmailAndPassword(mail, pass).addOnCompleteListener(this, task -> {
+                dlg.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                if (!task.isSuccessful()) {
+                    String msg = task.getException() == null ? "No se pudo iniciar sesión" : task.getException().getMessage();
+                    Toast.makeText(this, "Firebase: " + msg, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+                if (user == null || !FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
+                    FirebaseAuth.getInstance().signOut();
+                    Toast.makeText(this, "Ese usuario no está autorizado para ML Central", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit().putString("firebase_login_email", mail).apply();
+                loginDialogShowing = false;
+                dlg.dismiss();
+                startAfterLogin();
+                refresh();
+            });
+        }));
+        dlg.setOnDismissListener(x -> {
+            loginDialogShowing = false;
+            refresh();
+        });
+        dlg.show();
+    }
+
+    private void startAfterLogin() {
+        if (!FirebaseTransport.signedIn(this)) return;
+        startListener();
+        if (!syncStarted) {
+            syncStarted = true;
+            ReadSync.requestHistoryOnceAsync(this);
+            StateSync.requestSnapshotAsync(this, true);
+            StateSync.flushPendingAsync(this);
+        }
     }
 
     private void buildUi() {
@@ -231,6 +328,7 @@ public class MainActivity extends Activity {
     private void startListener() {
         Intent i = new Intent(this, SaleListenerService.class);
         try {
+            stopService(i);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
             else startService(i);
         } catch (Exception ignored) {}
@@ -248,17 +346,24 @@ public class MainActivity extends Activity {
         unread.setTextColor(n > 0 ? Color.WHITE : UiKit.MUTED);
         unread.setBackground(n > 0 ? UiKit.rounded(UiKit.ACCENT, 14, this) : UiKit.roundedStroke(Color.WHITE, 14, UiKit.BORDER, this));
 
+        boolean signed = FirebaseTransport.signedIn(this);
         boolean c = SaleStore.connected(this);
         long at = SaleStore.connectedAt(this);
         String time = at > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at)) : "";
         SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
         String mode = p.getString("connection_mode", "");
-        if (c && "backup".equals(mode)) {
-            status.setText("● Conectado · respaldo · " + time);
+        if (!signed) {
+            status.setText("● Falta iniciar sesión en Firebase");
             status.setTextColor(UiKit.ORANGE);
-            modeBadge.setText("RESPALDO");
+            modeBadge.setText("LOGIN");
             modeBadge.setTextColor(UiKit.ORANGE);
             modeBadge.setBackground(UiKit.rounded(UiKit.ORANGE_SOFT, 99, this));
+        } else if (c && "firebase".equals(mode)) {
+            status.setText("● Firebase conectado · " + time);
+            status.setTextColor(UiKit.GREEN);
+            modeBadge.setText("FIREBASE");
+            modeBadge.setTextColor(UiKit.GREEN);
+            modeBadge.setBackground(UiKit.rounded(UiKit.GREEN_SOFT, 99, this));
         } else if (c) {
             status.setText("● Conectado · " + time);
             status.setTextColor(UiKit.GREEN);
@@ -305,9 +410,14 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        ReadSync.requestHistoryOnceAsync(this);
-        StateSync.requestSnapshotAsync(this, false);
-        StateSync.flushPendingAsync(this);
+        if (FirebaseTransport.signedIn(this)) {
+            startAfterLogin();
+            ReadSync.requestHistoryOnceAsync(this);
+            StateSync.requestSnapshotAsync(this, false);
+            StateSync.flushPendingAsync(this);
+        } else {
+            ensureFirebaseLogin();
+        }
         refresh();
     }
 }
