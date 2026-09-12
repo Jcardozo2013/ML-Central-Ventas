@@ -7,18 +7,22 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import com.google.firebase.database.ChildEventListener;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class SyncDiagnostics {
     private static final String PING_TITLE = "MLC_STATE_DIAG_PING_V1";
@@ -41,105 +45,91 @@ public final class SyncDiagnostics {
         return out.length() > 300 ? out.substring(0, 300) : out;
     }
 
-    private static int postPing(String pingId) throws Exception {
-        JSONObject body = new JSONObject();
-        body.put("type", "state_diag_ping_v1");
-        body.put("ping_id", pingId);
-        body.put("version", BuildConfig.VERSION_NAME);
-        body.put("at", System.currentTimeMillis() / 1000L);
-
-        JSONObject envelope = new JSONObject();
-        envelope.put("topic", ReadSync.topic());
-        envelope.put("title", PING_TITLE);
-        envelope.put("message", body.toString());
-        envelope.put("priority", 1);
-
-        byte[] data = envelope.toString().getBytes(StandardCharsets.UTF_8);
-        HttpURLConnection conn = (HttpURLConnection) new URL(AppConfig.BASE_URL).openConnection();
+    @SuppressWarnings("unchecked")
+    private static JSONObject snapshotJson(DataSnapshot snapshot) {
         try {
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(12000);
-            conn.setReadTimeout(12000);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            conn.setRequestProperty("User-Agent", "MLCentralVentas/" + BuildConfig.VERSION_NAME + " Diagnostic");
-            conn.setFixedLengthStreamingMode(data.length);
-            try (OutputStream os = conn.getOutputStream()) { os.write(data); }
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
-            return code;
-        } finally {
-            conn.disconnect();
+            Object raw = snapshot.getValue();
+            if (!(raw instanceof Map)) return null;
+            JSONObject out = new JSONObject((Map<String, Object>) raw);
+            if (!out.has("id") && snapshot.getKey() != null) out.put("id", snapshot.getKey());
+            return out;
+        } catch (Exception e) {
+            return null;
         }
-    }
-
-    private static String waitForPong(String pingId) throws Exception {
-        long deadline = System.currentTimeMillis() + 12000L;
-        String url = AppConfig.BASE_URL + AppConfig.TOPIC + "/json?poll=1&since=2m";
-        while (System.currentTimeMillis() < deadline) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            try {
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(8000);
-                conn.setRequestProperty("Accept", "application/x-ndjson");
-                conn.setRequestProperty("User-Agent", "MLCentralVentas/" + BuildConfig.VERSION_NAME + " Diagnostic");
-                int code = conn.getResponseCode();
-                if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
-                BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (line.trim().isEmpty()) continue;
-                    JSONObject msg;
-                    try { msg = new JSONObject(line); } catch (Exception ignored) { continue; }
-                    if (!"message".equals(msg.optString("event", ""))) continue;
-                    if (!PONG_TITLE.equals(msg.optString("title", ""))) continue;
-                    JSONObject body;
-                    try { body = new JSONObject(msg.optString("message", "{}")); } catch (Exception ignored) { continue; }
-                    if (pingId.equals(body.optString("ping_id", ""))) {
-                        return body.optString("windows_version", "Windows respondió");
-                    }
-                }
-            } finally {
-                conn.disconnect();
-            }
-            try { Thread.sleep(1200L); } catch (InterruptedException ignored) {}
-        }
-        return "";
     }
 
     public static void run(Activity activity) {
         if (activity == null) return;
         final long started = System.currentTimeMillis();
         new Thread(() -> {
+            FirebaseConfig.ensureInitialized(activity);
             SharedPreferences p = activity.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
             String pingId = UUID.randomUUID().toString();
             StringBuilder report = new StringBuilder();
             report.append("ML CENTRAL VENTAS — DIAGNÓSTICO ESTADOS\n");
             report.append("Versión APK: ").append(BuildConfig.VERSION_NAME).append("\n");
             report.append("Hora: ").append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(new Date())).append("\n");
+            report.append("Transporte: Firebase Realtime Database\n");
             report.append("Modo conexión: ").append(p.getString("connection_mode", "—")).append("\n");
             report.append("Último error conexión: ").append(p.getString("connection_last_error", "—")).append("\n");
-            report.append("Canal principal: ").append(shortTopic(AppConfig.TOPIC)).append(" (len=").append(AppConfig.TOPIC.length()).append(")\n");
-            report.append("Canal estados: ").append(shortTopic(ReadSync.topic())).append(" (len=").append(ReadSync.topic().length()).append(")\n");
+            report.append("Canal principal: ").append(shortTopic(AppConfig.TOPIC)).append("\n");
+            report.append("Canal estados: ").append(shortTopic(ReadSync.topic())).append("\n");
             report.append("Último estado PC: ").append(StateStore.statusText(activity)).append("\n\n");
-            report.append("Prueba PING: ");
-            try {
-                int code = postPing(pingId);
-                report.append("enviado HTTP ").append(code).append("\n");
-                report.append("Esperando PONG de Windows...\n");
-                String pong = waitForPong(pingId);
-                if (pong == null || pong.trim().isEmpty()) {
-                    report.append("RESULTADO: PING salió del celular, pero NO llegó PONG desde Windows en 12 s.\n");
-                    report.append("Lectura: revisar si Windows está leyendo el canal de Estados o si falla su respuesta.\n");
-                } else {
-                    report.append("RESULTADO: OK — Windows respondió: ").append(pong).append("\n");
-                    report.append("Lectura: el enlace ida/vuelta funciona. Si Estados no cargan, el fallo está en el armado/recepción del snapshot.\n");
+            report.append("Prueba PING Firebase: ");
+
+            if (!FirebaseTransport.signedIn(activity)) {
+                report.append("ERROR\nRESULTADO: no hay sesión Firebase iniciada.\n");
+            } else {
+                DatabaseReference main = FirebaseDatabase.getInstance().getReference("channels/main");
+                CountDownLatch latch = new CountDownLatch(1);
+                AtomicReference<String> pong = new AtomicReference<>("");
+                AtomicReference<ChildEventListener> holder = new AtomicReference<>();
+                ChildEventListener listener = new ChildEventListener() {
+                    @Override public void onChildAdded(DataSnapshot snapshot, String previousChildName) {
+                        JSONObject msg = snapshotJson(snapshot);
+                        if (msg == null || !PONG_TITLE.equals(msg.optString("title", ""))) return;
+                        try {
+                            JSONObject body = new JSONObject(msg.optString("message", "{}"));
+                            if (pingId.equals(body.optString("ping_id", ""))) {
+                                pong.set(body.optString("windows_version", "Windows respondió"));
+                                latch.countDown();
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                    @Override public void onChildChanged(DataSnapshot snapshot, String previousChildName) {}
+                    @Override public void onChildRemoved(DataSnapshot snapshot) {}
+                    @Override public void onChildMoved(DataSnapshot snapshot, String previousChildName) {}
+                    @Override public void onCancelled(DatabaseError error) { latch.countDown(); }
+                };
+                holder.set(listener);
+                main.limitToLast(200).addChildEventListener(listener);
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("type", "state_diag_ping_v1");
+                    body.put("ping_id", pingId);
+                    body.put("version", BuildConfig.VERSION_NAME);
+                    body.put("at", System.currentTimeMillis() / 1000L);
+                    FirebaseTransport.Result sent = FirebaseTransport.publish(activity, ReadSync.topic(), PING_TITLE, body, 1);
+                    if (!sent.ok) {
+                        report.append("ERROR\nRESULTADO: ").append(sent.detail).append("\n");
+                    } else {
+                        report.append("enviado\nEsperando PONG de Windows...\n");
+                        latch.await(15, TimeUnit.SECONDS);
+                        if (pong.get().trim().isEmpty()) {
+                            report.append("RESULTADO: PING salió del celular, pero NO llegó PONG desde Windows en 15 s.\n");
+                            report.append("Lectura: revisar la configuración Firebase de Windows.\n");
+                        } else {
+                            report.append("RESULTADO: OK — Windows respondió: ").append(pong.get()).append("\n");
+                            report.append("Lectura: Firebase ida/vuelta funciona correctamente.\n");
+                        }
+                    }
+                } catch (Exception e) {
+                    report.append("ERROR\nRESULTADO: ").append(errorText(e)).append("\n");
+                } finally {
+                    try { main.removeEventListener(holder.get()); } catch (Exception ignored) {}
                 }
-            } catch (Exception e) {
-                report.append("ERROR\n");
-                report.append("RESULTADO: ").append(errorText(e)).append("\n");
-                report.append("Lectura: el celular no pudo completar la prueba de red/canal.\n");
             }
+
             report.append("\nDuración: ").append((System.currentTimeMillis() - started) / 1000.0).append(" s\n");
             String text = report.toString();
             p.edit().putString("last_sync_diagnostic", text).apply();
