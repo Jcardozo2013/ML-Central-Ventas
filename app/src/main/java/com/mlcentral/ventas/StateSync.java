@@ -7,13 +7,6 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 public final class StateSync {
@@ -60,22 +53,6 @@ public final class StateSync {
         notifyUi(context);
     }
 
-    private static String responseDetail(HttpURLConnection conn, int code) {
-        String prefix = "HTTP " + code;
-        try {
-            InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
-            if (in == null) return prefix;
-            BufferedReader br = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
-            String line = br.readLine();
-            if (line == null || line.trim().isEmpty()) return prefix;
-            String clean = line.replace('\n', ' ').replace('\r', ' ').trim();
-            if (clean.length() > 120) clean = clean.substring(0, 120);
-            return prefix + " · " + clean;
-        } catch (Exception ignored) {
-            return prefix;
-        }
-    }
-
     private static String exceptionDetail(Exception e) {
         String name = e == null ? "Error" : e.getClass().getSimpleName();
         String msg = e == null || e.getMessage() == null ? "" : e.getMessage().trim();
@@ -83,68 +60,9 @@ public final class StateSync {
         return msg.isEmpty() ? name : name + " · " + msg;
     }
 
-    private static PostResult postJson(String title, JSONObject body) {
-        HttpURLConnection conn = null;
-        try {
-            JSONObject envelope = new JSONObject();
-            envelope.put("topic", topic());
-            envelope.put("title", title);
-            envelope.put("priority", 1);
-            envelope.put("message", body.toString());
-            byte[] data = envelope.toString().getBytes(StandardCharsets.UTF_8);
-
-            URL url = new URL(AppConfig.BASE_URL);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(12000);
-            conn.setReadTimeout(12000);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.11 Android");
-            conn.setFixedLengthStreamingMode(data.length);
-            try (OutputStream os = conn.getOutputStream()) { os.write(data); }
-            int code = conn.getResponseCode();
-            return new PostResult(code >= 200 && code < 300, responseDetail(conn, code));
-        } catch (Exception e) {
-            return new PostResult(false, exceptionDetail(e));
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
-
-    private static PostResult postClassic(String title, JSONObject body) {
-        HttpURLConnection conn = null;
-        try {
-            byte[] data = body.toString().getBytes(StandardCharsets.UTF_8);
-            URL url = new URL(AppConfig.BASE_URL + topic());
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(12000);
-            conn.setReadTimeout(12000);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
-            conn.setRequestProperty("Title", title);
-            conn.setRequestProperty("Priority", "min");
-            conn.setRequestProperty("User-Agent", "MLCentralVentas/1.11 Android");
-            conn.setFixedLengthStreamingMode(data.length);
-            try (OutputStream os = conn.getOutputStream()) { os.write(data); }
-            int code = conn.getResponseCode();
-            return new PostResult(code >= 200 && code < 300, responseDetail(conn, code));
-        } catch (Exception e) {
-            return new PostResult(false, exceptionDetail(e));
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
-
-    private static PostResult post(String title, JSONObject body) {
-        PostResult json = postJson(title, body);
-        if (json.ok) return json;
-        PostResult classic = postClassic(title, body);
-        if (classic.ok) return classic;
-        String detail = "JSON: " + json.detail + " · clásico: " + classic.detail;
-        if (detail.length() > 180) detail = detail.substring(0, 180);
-        return new PostResult(false, detail);
+    private static PostResult post(Context context, String title, JSONObject body) {
+        FirebaseTransport.Result result = FirebaseTransport.publish(context, topic(), title, body, 1);
+        return new PostResult(result.ok, result.detail);
     }
 
     public static void requestSnapshotAsync(Context context, boolean force) {
@@ -168,7 +86,7 @@ public final class StateSync {
 
                 PostResult lastResult = new PostResult(false, "sin respuesta");
                 for (int attempt = 1; attempt <= REQUEST_ATTEMPTS; attempt++) {
-                    lastResult = post(STATE_REQUEST_TITLE, body);
+                    lastResult = post(app, STATE_REQUEST_TITLE, body);
                     if (lastResult.ok) break;
                     if (attempt < REQUEST_ATTEMPTS) {
                         setStatus(app, "Estados PC: reintentando envío " + (attempt + 1) + "/" + REQUEST_ATTEMPTS + "…");
@@ -236,7 +154,7 @@ public final class StateSync {
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject cmd = arr.optJSONObject(i);
                     if (cmd == null) continue;
-                    post(STATE_CHANGE_TITLE, cmd);
+                    post(app, STATE_CHANGE_TITLE, cmd);
                     try { Thread.sleep(150L); } catch (InterruptedException ignored) {}
                 }
             } finally {
@@ -287,5 +205,6 @@ public final class StateSync {
         boolean ok = success(body);
         String message = body.optString("message", ok ? "Cambio confirmado" : "Cambio rechazado");
         StateStore.setStatus(app, (ok ? "PC confirmó: " : "PC rechazó: ") + message);
+        notifyUi(app);
     }
 }
