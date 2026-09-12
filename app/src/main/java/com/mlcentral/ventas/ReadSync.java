@@ -25,9 +25,6 @@ public final class ReadSync {
 
     private ReadSync() {}
 
-    // El topic base actual ya mide 57 caracteres. ntfy admite hasta 64.
-    // Usar "-readsync" lo llevaba a 66 y ntfy devolvía HTTP 400 topic invalid.
-    // "-rs" mantiene el canal privado derivado y queda dentro del límite.
     public static String topic() { return AppConfig.TOPIC + "-rs"; }
     public static String streamUrl() { return AppConfig.BASE_URL + topic() + "/json"; }
 
@@ -61,6 +58,11 @@ public final class ReadSync {
         SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
         if (p.getBoolean("full_history_restore_done_v3", false)) return;
 
+        String active = p.getString("full_history_active_request_v3", "");
+        if (active != null && !active.trim().isEmpty()) {
+            return; // Ya se está restaurando: no lanzar otro request_id encima del actual.
+        }
+
         long now = System.currentTimeMillis();
         long last = p.getLong("full_history_request_last_at_v3", 0L);
         if (last > 0 && now - last < HISTORY_RETRY_MS) return;
@@ -72,9 +74,6 @@ public final class ReadSync {
 
         Thread t = new Thread(() -> {
             try {
-                // Cada reintento usa un request_id NUEVO. Así, si el BEGIN/FIN anterior
-                // se perdió en la red, Windows no lo considera ya atendido y vuelve a
-                // enviar el historial completo.
                 String requestId = UUID.randomUUID().toString();
                 p.edit()
                         .putString("full_history_request_id_v3", requestId)
@@ -124,7 +123,7 @@ public final class ReadSync {
             body.put("type", "read_sync_v1");
             body.put("ids", arr);
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.14 Android");
+            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.17 Android");
         } catch (Exception ignored) {
             return false;
         }
@@ -136,7 +135,7 @@ public final class ReadSync {
             body.put("type", "full_history_request_v2");
             body.put("request_id", requestId == null ? "" : requestId.trim());
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.14 Android");
+            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.17 Android");
         } catch (Exception ignored) {
             return false;
         }
