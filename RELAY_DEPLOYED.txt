@@ -1,0 +1,4 @@
+Cloudflare relay endpoint for ML Central mobile sync:
+https://ml-central-relay.jcardozo2013.workers.dev/
+
+Introduced with APK v1.16 / Windows v20.50.
