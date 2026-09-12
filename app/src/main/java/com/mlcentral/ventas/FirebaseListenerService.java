@@ -55,12 +55,12 @@ public class FirebaseListenerService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        ensureForegroundNow();
         FirebaseConfig.ensureInitialized(this);
-        createChannels();
-        startForeground(7, serviceNotification("Conectando con Firebase…"));
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        ensureForegroundNow();
         FirebaseConfig.ensureInitialized(this);
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user == null || !FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
@@ -78,6 +78,11 @@ public class FirebaseListenerService extends Service {
             stateWorker.start();
         }
         return START_STICKY;
+    }
+
+    private void ensureForegroundNow() {
+        createChannels();
+        startForeground(7, serviceNotification("Conectando con Firebase…"));
     }
 
     private SharedPreferences prefs() {
