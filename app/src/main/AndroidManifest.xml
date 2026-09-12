@@ -23,6 +23,7 @@
         <activity android:name=".SettingsActivity" android:exported="false" android:label="Configuración" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".StatusActivity" android:exported="false" android:label="Estados" />
+        <activity android:name=".MovementHistoryActivity" android:exported="false" android:label="Movimientos" />
         <activity android:name=".UnreadSalesActivity" android:exported="false" />
         <service android:name=".SaleListenerService" android:enabled="true" android:exported="false" android:stopWithTask="false" />
         <receiver android:name=".BootReceiver" android:enabled="true" android:exported="false">
