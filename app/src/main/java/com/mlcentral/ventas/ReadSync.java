@@ -50,7 +50,9 @@ public final class ReadSync {
     }
 
     private static void migrateHistoryLoopFix(SharedPreferences p) {
-        if (p.getBoolean("history_loop_fix_v117_migrated", false)) return;
+        // v1.22: una sola vez descartamos cualquier restauración que haya quedado
+        // a medias con v1.20/v1.21 y pedimos una nueva limpia.
+        if (p.getBoolean("history_loop_fix_v122_migrated", false)) return;
         p.edit()
                 .remove("full_history_active_request_v3")
                 .remove("full_history_started_at_v3")
@@ -61,6 +63,7 @@ public final class ReadSync {
                 .putLong("full_history_request_last_at_v3", 0L)
                 .putString("full_history_request_id_v3", "")
                 .putBoolean("history_loop_fix_v117_migrated", true)
+                .putBoolean("history_loop_fix_v122_migrated", true)
                 .apply();
     }
 
