@@ -6,10 +6,6 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -26,7 +22,7 @@ public final class ReadSync {
     private ReadSync() {}
 
     public static String topic() { return AppConfig.TOPIC + "-rs"; }
-    public static String streamUrl() { return AppConfig.BASE_URL + topic() + "/json"; }
+    public static String streamUrl() { return FirebaseConfig.DATABASE_URL + "/channels/rs"; }
 
     public static void acknowledgeAsync(Context context, Collection<String> ids) {
         Context app = context.getApplicationContext();
@@ -44,7 +40,7 @@ public final class ReadSync {
             try {
                 List<String> ids = SaleStore.pendingReadSync(app);
                 if (ids.isEmpty()) return;
-                if (publishRead(ids)) SaleStore.clearPendingReadSync(app, ids);
+                if (publishRead(app, ids)) SaleStore.clearPendingReadSync(app, ids);
             } finally {
                 sending = false;
             }
@@ -72,12 +68,11 @@ public final class ReadSync {
         Context app = context.getApplicationContext();
         SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
         migrateHistoryLoopFix(p);
+        if (!FirebaseTransport.signedIn(app)) return;
         if (p.getBoolean("full_history_restore_done_v3", false)) return;
 
         String active = p.getString("full_history_active_request_v3", "");
-        if (active != null && !active.trim().isEmpty()) {
-            return;
-        }
+        if (active != null && !active.trim().isEmpty()) return;
 
         long now = System.currentTimeMillis();
         long last = p.getLong("full_history_request_last_at_v3", 0L);
@@ -95,7 +90,7 @@ public final class ReadSync {
                         .putString("full_history_request_id_v3", requestId)
                         .putBoolean("full_history_restore_done_v3", false)
                         .apply();
-                if (publishFullHistoryRequest(requestId)) {
+                if (publishFullHistoryRequest(app, requestId)) {
                     p.edit().putLong("full_history_request_last_at_v3", System.currentTimeMillis()).apply();
                 }
             } finally {
@@ -106,31 +101,7 @@ public final class ReadSync {
         t.start();
     }
 
-    private static boolean post(String title, byte[] data, String userAgent) {
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(AppConfig.BASE_URL + topic());
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(12000);
-            conn.setReadTimeout(12000);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
-            conn.setRequestProperty("Title", title);
-            conn.setRequestProperty("Priority", "min");
-            conn.setRequestProperty("User-Agent", userAgent);
-            conn.setFixedLengthStreamingMode(data.length);
-            try (OutputStream os = conn.getOutputStream()) { os.write(data); }
-            int code = conn.getResponseCode();
-            return code >= 200 && code < 300;
-        } catch (Exception ignored) {
-            return false;
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
-
-    private static boolean publishRead(List<String> ids) {
+    private static boolean publishRead(Context context, List<String> ids) {
         try {
             JSONArray arr = new JSONArray();
             for (String id : ids) if (id != null && !id.trim().isEmpty()) arr.put(id.trim());
@@ -139,19 +110,19 @@ public final class ReadSync {
             body.put("type", "read_sync_v1");
             body.put("ids", arr);
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.17 Android");
+            return FirebaseTransport.publish(context, topic(), TITLE, body, 1).ok;
         } catch (Exception ignored) {
             return false;
         }
     }
 
-    private static boolean publishFullHistoryRequest(String requestId) {
+    private static boolean publishFullHistoryRequest(Context context, String requestId) {
         try {
             JSONObject body = new JSONObject();
             body.put("type", "full_history_request_v2");
             body.put("request_id", requestId == null ? "" : requestId.trim());
             body.put("at", System.currentTimeMillis() / 1000L);
-            return post(FULL_HISTORY_REQUEST_TITLE, body.toString().getBytes(StandardCharsets.UTF_8), "MLCentralVentas/1.17 Android");
+            return FirebaseTransport.publish(context, topic(), FULL_HISTORY_REQUEST_TITLE, body, 1).ok;
         } catch (Exception ignored) {
             return false;
         }
