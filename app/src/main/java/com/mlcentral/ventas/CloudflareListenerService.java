@@ -36,9 +36,10 @@ public class CloudflareListenerService extends Service {
     public static final String FULL_HISTORY_SALE_TITLE = "MLC_FULL_HISTORY_SALE_V2";
     public static final String FULL_HISTORY_END_TITLE = "MLC_FULL_HISTORY_END_V2";
 
-    private static final long MAIN_POLL_MS = 3000L;
-    private static final long READSYNC_POLL_MS = 4500L;
-    private static final long ERROR_RETRY_MS = 7000L;
+    // D1 free: consultar poco y solo lo nuevo. El usuario puede forzar Estados manualmente.
+    private static final long MAIN_POLL_MS = 30_000L;
+    private static final long READSYNC_POLL_MS = 60_000L;
+    private static final long ERROR_RETRY_MS = 300_000L;
     private static final String BOOTSTRAP_KEY = "cloudflare_d1_v118_bootstrap_done";
     private static final String READSYNC_BOOTSTRAP_KEY = "cloudflare_d1_v118_readsync_bootstrap_done";
 
@@ -74,14 +75,15 @@ public class CloudflareListenerService extends Service {
     }
 
     private void stateMaintenanceLoop() {
-        try { Thread.sleep(2500L); } catch (InterruptedException ignored) {}
+        try { Thread.sleep(5000L); } catch (InterruptedException ignored) {}
         while (running) {
             try {
                 StateSync.flushPendingAsync(this);
-                if (StateStore.isStale(this, 90_000L)) StateSync.requestSnapshotAsync(this, false);
-                try { Thread.sleep(60_000L); } catch (InterruptedException ignored) {}
+                // El refresco automático completo se hace solo si lleva 10 minutos sin estado fresco.
+                if (StateStore.isStale(this, 600_000L)) StateSync.requestSnapshotAsync(this, false);
+                try { Thread.sleep(300_000L); } catch (InterruptedException ignored) {}
             } catch (Exception ignored) {
-                try { Thread.sleep(10_000L); } catch (InterruptedException ignored2) {}
+                try { Thread.sleep(ERROR_RETRY_MS); } catch (InterruptedException ignored2) {}
             }
         }
     }
@@ -137,10 +139,7 @@ public class CloudflareListenerService extends Service {
                 try { o = new JSONObject(line); } catch (Exception ignored) { continue; }
                 if (!"message".equals(o.optString("event", ""))) continue;
                 count++;
-
-                // Primera apertura de v1.18: avanzamos por todo lo viejo del relay sin volver a notificarlo.
                 if (!bootstrap) handleMessage(o);
-
                 String relayId = o.optString("id", "").trim();
                 if (!relayId.isEmpty()) SaleStore.setLastMessageId(this, relayId);
             }
@@ -150,7 +149,7 @@ public class CloudflareListenerService extends Service {
             return new PollResult(true, count);
         } catch (Exception e) {
             setConnectionInfo(false, "Cloudflare: " + errorText(e));
-            updateServiceNotification("Reconectando con Cloudflare…");
+            updateServiceNotification("Cloudflare temporalmente sin enlace");
             return new PollResult(false, count);
         } finally {
             if (conn != null) conn.disconnect();
@@ -164,7 +163,6 @@ public class CloudflareListenerService extends Service {
             if (r.ok && bootstrap && r.count < 500) {
                 bootstrap = false;
                 prefs().edit().putBoolean(BOOTSTRAP_KEY, true).apply();
-                // Ya estamos parados en el final del relay: pedimos información fresca a Windows.
                 ReadSync.requestHistoryOnceAsync(this);
                 StateSync.requestSnapshotAsync(this, true);
                 StateSync.flushPendingAsync(this);
@@ -352,8 +350,6 @@ public class CloudflareListenerService extends Service {
         if (handleHistoryMessage(o)) return;
 
         String title = o.optString("title", "");
-
-        // Mensajes internos de sincronización nunca son ventas ni deben notificar.
         if (title.startsWith("MLC_")) return;
 
         String message = o.optString("message", "Venta nueva");
@@ -377,7 +373,6 @@ public class CloudflareListenerService extends Service {
             return;
         }
 
-        // Solo títulos de venta reales llegan a la bandeja de ventas.
         String upper = title.toUpperCase(Locale.ROOT);
         if (!upper.contains("VENTA") && !upper.contains("ML CENTRAL")) return;
 
