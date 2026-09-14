@@ -11,10 +11,6 @@ import org.json.JSONObject;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 public final class FirebaseTransport {
     private FirebaseTransport() {}
@@ -58,7 +54,10 @@ public final class FirebaseTransport {
                 return new Result(false, "Firebase: usuario no autorizado", "");
             }
 
-            DatabaseReference child = FirebaseDatabase.getInstance()
+            FirebaseDatabase db = FirebaseDatabase.getInstance();
+            try { db.goOnline(); } catch (Exception ignored) {}
+
+            DatabaseReference child = db
                     .getReference(pathForTopic(topic))
                     .push();
             String key = child.getKey();
@@ -74,21 +73,16 @@ public final class FirebaseTransport {
             value.put("time", System.currentTimeMillis() / 1000L);
             if (sequenceId != null && !sequenceId.trim().isEmpty()) value.put("sequence_id", sequenceId.trim());
 
-            CountDownLatch latch = new CountDownLatch(1);
-            AtomicBoolean ok = new AtomicBoolean(false);
-            AtomicReference<String> detail = new AtomicReference<>("Firebase: timeout");
-            child.setValue(value).addOnCompleteListener(task -> {
-                if (task.isSuccessful()) {
-                    ok.set(true);
-                    detail.set("Firebase OK");
-                } else {
-                    Exception e = task.getException();
-                    detail.set("Firebase: " + (e == null ? "error" : String.valueOf(e.getMessage())));
-                }
-                latch.countDown();
+            // v1.29: NO bloquear 12 segundos esperando confirmación remota.
+            // Realtime Database aplica la escritura localmente y, con persistencia
+            // habilitada, conserva la operación pendiente hasta que Firebase pueda
+            // confirmarla. La respuesta de Windows sigue siendo la confirmación real
+            // que elimina el comando pendiente de la APK.
+            child.setValue(value).addOnFailureListener(error -> {
+                // No borramos ni invalidamos el comando local: StateSync lo volverá
+                // a intentar periódicamente y RTDB mantiene también su propia cola.
             });
-            if (!latch.await(12, TimeUnit.SECONDS)) return new Result(false, "Firebase: timeout", key);
-            return new Result(ok.get(), detail.get(), key);
+            return new Result(true, "Firebase: en cola", key);
         } catch (Exception e) {
             return new Result(false, "Firebase: " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), "");
         }
