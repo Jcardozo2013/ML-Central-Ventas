@@ -1,6 +1,7 @@
 package com.mlcentral.ventas;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -11,20 +12,35 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * Nombre conservado para no cambiar el componente Android existente.
- * En v1.34 el servicio corre en un proceso separado de diagnóstico. Si ocurre
- * una excepción no controlada, se guarda el stack completo antes de que Android
- * termine solamente el proceso del servicio.
+ * Servicio de ventas protegido. Desde v1.35 no reutiliza cursores antiguos al
+ * arrancar: Firebase se posiciona primero en el final del canal y después la
+ * app solicita historial/estados por el protocolo normal. Esto evita que un
+ * teléfono intente reproducir miles de eventos acumulados de una sola vez.
  */
 public class SaleListenerService extends FirebaseListenerService {
-    public static final String CRASH_FILE = "mlcentral_service_crash_v134.txt";
-    public static final String EVENT_FILE = "mlcentral_service_event_v134.txt";
+    public static final String CRASH_FILE = "mlcentral_service_crash_v135.txt";
+    public static final String EVENT_FILE = "mlcentral_service_event_v135.txt";
 
     private Thread.UncaughtExceptionHandler previousHandler;
 
     @Override public void onCreate() {
         installCrashCapture();
         writeEvent("onCreate: entrando");
+
+        // IMPORTANTE: no iniciar desde un cursor viejo. El listener base, al no
+        // encontrar cursor, consulta solamente el último elemento y se engancha
+        // desde allí. Luego pide historial y estados por sus canales dedicados.
+        try {
+            SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+            p.edit()
+                    .remove("firebase_main_cursor_v120")
+                    .remove("firebase_rs_cursor_v120")
+                    .commit();
+            writeEvent("cursores antiguos descartados");
+        } catch (Throwable error) {
+            writeEvent("no se pudieron limpiar cursores: " + error.getClass().getSimpleName());
+        }
+
         super.onCreate();
         writeEvent("onCreate: OK");
     }
@@ -76,7 +92,7 @@ public class SaleListenerService extends FirebaseListenerService {
             pw.flush();
 
             StringBuilder out = new StringBuilder();
-            out.append("ML Central servicio v1.34\n");
+            out.append("ML Central servicio v1.35\n");
             out.append("fecha: ")
                     .append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss.SSS", Locale.getDefault()).format(new Date()))
                     .append('\n');
