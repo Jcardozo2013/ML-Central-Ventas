@@ -8,6 +8,7 @@ import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
@@ -22,6 +23,15 @@ public final class StateStore {
     private static final String LAST_STATUS_AT_KEY = "state_last_status_at_v1";
 
     private StateStore() {}
+
+    public static final class Summary {
+        public int validSales;
+        public int todaySales;
+        public double todayProfit;
+        public double monthProfit;
+        public int todayPendingProfit;
+        public int monthPendingProfit;
+    }
 
     private static SharedPreferences prefs(Context c) {
         return c.getApplicationContext().getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
@@ -138,6 +148,61 @@ public final class StateStore {
                 return ob.compareTo(oa);
             }
         });
+        return out;
+    }
+
+    private static boolean isToday(long unixSeconds) {
+        if (unixSeconds <= 0) return false;
+        Calendar now = Calendar.getInstance();
+        Calendar sale = Calendar.getInstance();
+        sale.setTimeInMillis(unixSeconds * 1000L);
+        return now.get(Calendar.ERA) == sale.get(Calendar.ERA)
+                && now.get(Calendar.YEAR) == sale.get(Calendar.YEAR)
+                && now.get(Calendar.DAY_OF_YEAR) == sale.get(Calendar.DAY_OF_YEAR);
+    }
+
+    private static boolean isThisMonth(long unixSeconds) {
+        if (unixSeconds <= 0) return false;
+        Calendar now = Calendar.getInstance();
+        Calendar sale = Calendar.getInstance();
+        sale.setTimeInMillis(unixSeconds * 1000L);
+        return now.get(Calendar.ERA) == sale.get(Calendar.ERA)
+                && now.get(Calendar.YEAR) == sale.get(Calendar.YEAR)
+                && now.get(Calendar.MONTH) == sale.get(Calendar.MONTH);
+    }
+
+    /**
+     * v1.39: el resumen se calcula desde el tablero autoritativo de Windows.
+     * El historial puede conservar ventas devueltas/canceladas como registro,
+     * pero esas ventas ya no inflan los totales si Windows las quitó del tablero.
+     */
+    public static synchronized Summary summary(Context c) {
+        Summary out = new Summary();
+        JSONObject all = object(prefs(c).getString(FINAL_KEY, "{}"));
+        JSONArray names = all.names();
+        if (names == null) return out;
+
+        for (int i = 0; i < names.length(); i++) {
+            JSONObject row = all.optJSONObject(names.optString(i));
+            if (row == null) continue;
+            out.validSales++;
+
+            long saleUnix = row.optLong("sale_unix", 0L);
+            boolean today = isToday(saleUnix);
+            boolean month = isThisMonth(saleUnix);
+            boolean hasProfit = row.has("profit") && !row.isNull("profit");
+            double profit = hasProfit ? row.optDouble("profit", 0.0) : 0.0;
+
+            if (today) {
+                out.todaySales++;
+                if (hasProfit) out.todayProfit += profit;
+                else out.todayPendingProfit++;
+            }
+            if (month) {
+                if (hasProfit) out.monthProfit += profit;
+                else out.monthPendingProfit++;
+            }
+        }
         return out;
     }
 
