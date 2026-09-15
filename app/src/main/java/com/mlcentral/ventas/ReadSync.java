@@ -50,8 +50,6 @@ public final class ReadSync {
     }
 
     private static void migrateHistoryLoopFix(SharedPreferences p) {
-        // v1.22: una sola vez descartamos cualquier restauración que haya quedado
-        // a medias con v1.20/v1.21 y pedimos una nueva limpia.
         if (p.getBoolean("history_loop_fix_v122_migrated", false)) return;
         p.edit()
                 .remove("full_history_active_request_v3")
@@ -67,10 +65,28 @@ public final class ReadSync {
                 .apply();
     }
 
+    private static void migrateAuthoritativeHistoryFix(SharedPreferences p) {
+        // v1.38: el historial completo de Windows pasa a ser la fuente base.
+        // Forzamos una sola resincronización limpia para quitar ventas locales
+        // antiguas/corregidas que podían inflar la ganancia mensual.
+        if (p.getBoolean("history_authoritative_fix_v138_migrated", false)) return;
+        p.edit()
+                .remove("full_history_active_request_v3")
+                .remove("full_history_started_at_v3")
+                .putInt("full_history_expected_v3", 0)
+                .putInt("full_history_received_v3", 0)
+                .putBoolean("full_history_restore_done_v3", false)
+                .putLong("full_history_request_last_at_v3", 0L)
+                .putString("full_history_request_id_v3", "")
+                .putBoolean("history_authoritative_fix_v138_migrated", true)
+                .apply();
+    }
+
     public static void requestHistoryOnceAsync(Context context) {
         Context app = context.getApplicationContext();
         SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
         migrateHistoryLoopFix(p);
+        migrateAuthoritativeHistoryFix(p);
         if (!FirebaseTransport.signedIn(app)) return;
         if (p.getBoolean("full_history_restore_done_v3", false)) return;
 
