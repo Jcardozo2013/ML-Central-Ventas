@@ -1,6 +1,7 @@
 package com.mlcentral.ventas;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
@@ -20,26 +21,47 @@ public final class FirebaseConfig {
     public static synchronized void ensureInitialized(Context context) {
         if (context == null) return;
         Context app = context.getApplicationContext();
-        if (FirebaseApp.getApps(app).isEmpty()) {
-            FirebaseOptions options = new FirebaseOptions.Builder()
-                    .setProjectId(PROJECT_ID)
-                    .setApplicationId(APP_ID)
-                    .setApiKey(API_KEY)
-                    .setDatabaseUrl(DATABASE_URL)
-                    .build();
-            FirebaseApp.initializeApp(app, options);
-        }
-
-        // v1.29: RTDB conserva escrituras pendientes en disco. Si un teléfono puede
-        // leer Firebase pero tarda en confirmar una escritura, el cambio no se pierde:
-        // queda en cola y Firebase lo vuelve a enviar cuando la conexión responde.
-        if (!databasePrepared) {
-            try {
-                FirebaseDatabase.getInstance().setPersistenceEnabled(true);
-            } catch (Exception ignored) {
-                // Puede ocurrir si RTDB ya fue usado en este proceso. No impedir el arranque.
+        try {
+            if (FirebaseApp.getApps(app).isEmpty()) {
+                FirebaseOptions options = new FirebaseOptions.Builder()
+                        .setProjectId(PROJECT_ID)
+                        .setApplicationId(APP_ID)
+                        .setApiKey(API_KEY)
+                        .setDatabaseUrl(DATABASE_URL)
+                        .build();
+                FirebaseApp.initializeApp(app, options);
             }
-            databasePrepared = true;
+
+            if (!databasePrepared) {
+                FirebaseDatabase db = FirebaseDatabase.getInstance();
+
+                // v1.31: no usar la cola/caché persistente de RTDB en disco.
+                // La APK ya tiene su propia cola durable en StateSync/ReadSync y
+                // guardar una segunda cola en Firebase estaba provocando reenvíos,
+                // carga excesiva y cierres en algunos teléfonos.
+                try { db.setPersistenceEnabled(false); } catch (Throwable ignored) {}
+
+                // Migración única desde v1.29/v1.30: descartar escrituras antiguas
+                // que hayan quedado pendientes dentro de la cola interna de Firebase.
+                // Los cambios reales pendientes siguen guardados por StateSync/ReadSync
+                // y se reintentan de forma controlada.
+                SharedPreferences p = app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
+                if (!p.getBoolean("firebase_queue_migrated_v131", false)) {
+                    try { db.purgeOutstandingWrites(); } catch (Throwable ignored) {}
+                    p.edit().putBoolean("firebase_queue_migrated_v131", true).apply();
+                }
+
+                try { db.goOnline(); } catch (Throwable ignored) {}
+                databasePrepared = true;
+            }
+        } catch (Throwable error) {
+            // Firebase nunca debe impedir que la interfaz de la APK abra.
+            try {
+                app.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString("firebase_init_error", error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage()))
+                        .apply();
+            } catch (Throwable ignored) {}
         }
     }
 }
