@@ -17,9 +17,10 @@ public final class HistoryRestore {
     private static final int MAX_HISTORY = 5000;
     private static final long ACTIVE_STALE_MS = 10 * 60 * 1000L;
 
-    // v1.22: durante una restauración completa juntamos las ventas en memoria
-    // y escribimos el historial una sola vez al final. Esto evita reconstruir
-    // y guardar 90+ veces el mismo JSON en celulares lentos.
+    // Durante una restauración completa juntamos las ventas en memoria y
+    // escribimos una sola vez al final. Windows es la fuente autoritativa del
+    // historial; solo conservamos ventas locales realmente nuevas que hayan
+    // llegado mientras la restauración estaba en curso.
     private static final Map<String, JSONObject> fullBuffer = new LinkedHashMap<>();
     private static String fullBufferRequestId = "";
 
@@ -90,27 +91,19 @@ public final class HistoryRestore {
         if (rid.isEmpty()) return;
 
         String wanted = p.getString("full_history_request_id_v3", "");
-        if (wanted != null && !wanted.trim().isEmpty() && !wanted.trim().equals(rid)) {
-            return;
-        }
-
-        if (p.getBoolean("full_history_restore_done_v3", false)) {
-            return;
-        }
+        if (wanted != null && !wanted.trim().isEmpty() && !wanted.trim().equals(rid)) return;
 
         String active = p.getString("full_history_active_request_v3", "");
         long startedAt = p.getLong("full_history_started_at_v3", 0L);
         long now = System.currentTimeMillis();
 
         if (active != null && !active.trim().isEmpty()) {
-            if (active.trim().equals(rid)) {
-                return;
-            }
-            if (startedAt > 0L && now - startedAt < ACTIVE_STALE_MS) {
-                return;
-            }
+            if (active.trim().equals(rid)) return;
+            if (startedAt > 0L && now - startedAt < ACTIVE_STALE_MS) return;
         }
 
+        // Aceptamos una restauración nueva aunque haya existido una anterior.
+        // El request_id define cuál lote está activo.
         fullBuffer.clear();
         fullBufferRequestId = rid;
 
@@ -148,41 +141,56 @@ public final class HistoryRestore {
         String rid = requestId == null ? "" : requestId.trim();
         if (active != null && !active.trim().isEmpty() && !active.trim().equals(rid)) return;
 
-        Map<String, JSONObject> byId = new LinkedHashMap<>();
-        try {
-            JSONArray old = new JSONArray(p.getString("history", "[]"));
-            for (int i = 0; i < old.length(); i++) {
-                JSONObject o = old.optJSONObject(i);
-                if (o == null) continue;
-                String sid = o.optString("saleId", "").trim();
-                if (!sid.isEmpty() && !byId.containsKey(sid)) byId.put(sid, o);
-            }
-        } catch (Exception ignored) {}
-
-        if (rid.equals(fullBufferRequestId)) {
-            byId.putAll(fullBuffer);
-        }
-        writeSortedHistory(p, byId);
-
         int expected = Math.max(0, total);
         int received = rid.equals(fullBufferRequestId) ? fullBuffer.size() : p.getInt("full_history_received_v3", 0);
         boolean complete = expected == 0 || received >= expected;
+        long restoreStartedAt = p.getLong("full_history_started_at_v3", 0L);
+
+        if (complete && rid.equals(fullBufferRequestId)) {
+            // El lote recibido desde Windows reemplaza el historial anterior.
+            // Así desaparecen ventas locales antiguas/corregidas que ya no
+            // existen en la fuente central y no vuelven a inflar ganancias.
+            Map<String, JSONObject> byId = new LinkedHashMap<>();
+            byId.putAll(fullBuffer);
+
+            // Si una venta nueva llegó en vivo durante la restauración y aún no
+            // estaba incluida en el snapshot de Windows, la conservamos.
+            if (restoreStartedAt > 0L) {
+                try {
+                    JSONArray old = new JSONArray(p.getString("history", "[]"));
+                    long restoreStartSeconds = restoreStartedAt / 1000L;
+                    for (int i = 0; i < old.length(); i++) {
+                        JSONObject o = old.optJSONObject(i);
+                        if (o == null) continue;
+                        String sid = o.optString("saleId", "").trim();
+                        if (sid.isEmpty() || byId.containsKey(sid)) continue;
+                        long saleTime = o.optLong("time", 0L);
+                        if (saleTime >= restoreStartSeconds) byId.put(sid, o);
+                    }
+                } catch (Exception ignored) {}
+            }
+            writeSortedHistory(p, byId);
+        }
 
         SharedPreferences.Editor e = p.edit()
                 .putInt("full_history_expected_v3", expected)
                 .putInt("full_history_received_v3", received)
                 .putBoolean("full_history_restore_done_v3", complete)
                 .putLong("full_history_completed_at_v3", complete ? System.currentTimeMillis() : 0L);
+
         if (complete) {
             e.putString("full_history_active_request_v3", "")
                     .putLong("full_history_started_at_v3", 0L);
+        } else {
+            // Permitimos que ReadSync vuelva a pedir un lote limpio.
+            e.putString("full_history_active_request_v3", "")
+                    .putLong("full_history_started_at_v3", 0L)
+                    .putLong("full_history_request_last_at_v3", 0L);
         }
         e.apply();
 
-        if (complete) {
-            fullBuffer.clear();
-            fullBufferRequestId = "";
-        }
+        fullBuffer.clear();
+        fullBufferRequestId = "";
     }
 
     private static int historyCount(Context context) {
@@ -197,8 +205,7 @@ public final class HistoryRestore {
         int received = p.getInt("full_history_received_v3", 0);
         String active = p.getString("full_history_active_request_v3", "");
         if (done) {
-            int count = expected > 0 ? Math.max(received, expected) : historyCount(context);
-            return "Historial completo: " + count + " ventas";
+            return "Historial completo: " + historyCount(context) + " ventas";
         }
         if (active != null && !active.trim().isEmpty()) {
             if (expected > 0) return "Restaurando historial: " + received + "/" + expected;
