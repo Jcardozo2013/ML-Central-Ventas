@@ -8,6 +8,8 @@ import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -33,15 +35,29 @@ import java.util.Locale;
 import java.util.Map;
 
 public class HistoryActivity extends Activity {
+    private static final int PAGE_SIZE = 40;
+    private static final long SEARCH_DEBOUNCE_MS = 220L;
+    private static final long REFRESH_DEBOUNCE_MS = 350L;
+
     private LinearLayout list;
     private TextView count;
     private EditText search;
     private Button allBtn, todayBtn, weekBtn, monthBtn;
     private String filter = "ALL";
+    private int visibleLimit = PAGE_SIZE;
     private final List<Item> items = new ArrayList<>();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    private final Runnable searchRender = () -> {
+        visibleLimit = PAGE_SIZE;
+        render();
+    };
+    private final Runnable delayedRefresh = this::refresh;
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) { refresh(); }
+        @Override public void onReceive(Context context, Intent intent) {
+            scheduleRefresh();
+        }
     };
 
     private static final class Item {
@@ -51,12 +67,19 @@ public class HistoryActivity extends Activity {
         long time;
         boolean read;
         int number;
+
+        String searchText;
+        String product;
+        String sale;
+        String profit;
+        String qty;
+        String dayKey;
+        String dayLabel;
     }
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildUi();
-        refresh();
     }
 
     private void buildUi() {
@@ -92,7 +115,10 @@ public class HistoryActivity extends Activity {
         search.setBackground(UiKit.roundedStroke(Color.WHITE, 14, UiKit.BORDER, this));
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { render(); }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                handler.removeCallbacks(searchRender);
+                handler.postDelayed(searchRender, SEARCH_DEBOUNCE_MS);
+            }
             @Override public void afterTextChanged(Editable s) {}
         });
         root.addView(search, UiKit.fullWidth(this, 0, 10));
@@ -124,6 +150,7 @@ public class HistoryActivity extends Activity {
         b.setMinHeight(UiKit.dp(this, 42));
         b.setOnClickListener(v -> {
             filter = value;
+            visibleLimit = PAGE_SIZE;
             updateFilterButtons();
             render();
         });
@@ -143,6 +170,11 @@ public class HistoryActivity extends Activity {
         UiKit.setSelected(monthBtn, this, "MONTH".equals(filter));
     }
 
+    private void scheduleRefresh() {
+        handler.removeCallbacks(delayedRefresh);
+        handler.postDelayed(delayedRefresh, REFRESH_DEBOUNCE_MS);
+    }
+
     private void refresh() {
         items.clear();
         try {
@@ -157,6 +189,7 @@ public class HistoryActivity extends Activity {
                 x.message = o.optString("message", "");
                 x.time = o.optLong("time", 0L);
                 x.read = o.optBoolean("read", false);
+                prepareItem(x);
                 items.add(x);
             }
         } catch (Exception ignored) {}
@@ -173,15 +206,26 @@ public class HistoryActivity extends Activity {
         render();
     }
 
+    private void prepareItem(Item x) {
+        x.product = valueFor(x.message, "Producto:");
+        if (x.product.isEmpty()) x.product = firstUsefulLine(x.message);
+        if (x.product.isEmpty()) x.product = "Venta Mercado Libre";
+        x.sale = valueFor(x.message, "Venta:");
+        x.profit = valueFor(x.message, "Ganancia:");
+        x.qty = valueFor(x.message, "Cantidad:");
+        x.searchText = (x.saleId + " " + x.title + " " + x.product + " " + x.message).toLowerCase(Locale.ROOT);
+        x.dayKey = dayKey(x.time);
+        x.dayLabel = dayLabel(x.time);
+    }
+
     private void render() {
-        if (list == null) return;
+        if (list == null || count == null) return;
         list.removeAllViews();
         String q = search == null ? "" : search.getText().toString().trim().toLowerCase(Locale.ROOT);
         List<Item> visible = new ArrayList<>();
         for (Item x : items) {
             if (!matchesDate(x.time)) continue;
-            String haystack = (x.saleId + " " + x.title + " " + x.message).toLowerCase(Locale.ROOT);
-            if (!q.isEmpty() && !haystack.contains(q)) continue;
+            if (!q.isEmpty() && (x.searchText == null || !x.searchText.contains(q))) continue;
             visible.add(x);
         }
 
@@ -195,16 +239,29 @@ public class HistoryActivity extends Activity {
             return;
         }
 
+        int limit = Math.min(visibleLimit, visible.size());
         String lastGroup = "";
-        for (Item x : visible) {
-            String group = dayKey(x.time);
+        for (int i = 0; i < limit; i++) {
+            Item x = visible.get(i);
+            String group = x.dayKey;
             if (!group.equals(lastGroup)) {
-                TextView section = UiKit.text(this, dayLabel(x.time), 13, UiKit.MUTED, true);
+                TextView section = UiKit.text(this, x.dayLabel, 13, UiKit.MUTED, true);
                 section.setPadding(UiKit.dp(this, 2), UiKit.dp(this, 8), 0, UiKit.dp(this, 7));
                 list.addView(section);
                 lastGroup = group;
             }
             list.addView(saleCard(x), UiKit.fullWidth(this, 0, 10));
+        }
+
+        if (limit < visible.size()) {
+            int remaining = visible.size() - limit;
+            int next = Math.min(PAGE_SIZE, remaining);
+            Button more = UiKit.button(this, "Mostrar " + next + " más · quedan " + remaining);
+            more.setOnClickListener(v -> {
+                visibleLimit += PAGE_SIZE;
+                render();
+            });
+            list.addView(more, UiKit.fullWidth(this, 4, 10));
         }
     }
 
@@ -220,25 +277,19 @@ public class HistoryActivity extends Activity {
         top.addView(statusPill(x));
         card.addView(top);
 
-        String product = valueFor(x.message, "Producto:");
-        if (product.isEmpty()) product = firstUsefulLine(x.message);
-        if (product.isEmpty()) product = "Venta Mercado Libre";
-        TextView productView = UiKit.text(this, product, 17, UiKit.TEXT, true);
+        TextView productView = UiKit.text(this, x.product, 17, UiKit.TEXT, true);
         productView.setPadding(0, UiKit.dp(this, 10), 0, UiKit.dp(this, 8));
         card.addView(productView);
 
-        String sale = valueFor(x.message, "Venta:");
-        String profit = valueFor(x.message, "Ganancia:");
-        String qty = valueFor(x.message, "Cantidad:");
         StringBuilder summary = new StringBuilder();
-        if (!sale.isEmpty()) summary.append("Venta: ").append(sale);
-        if (!profit.isEmpty()) {
+        if (!x.sale.isEmpty()) summary.append("Venta: ").append(x.sale);
+        if (!x.profit.isEmpty()) {
             if (summary.length() > 0) summary.append("   ·   ");
-            summary.append("Ganancia: ").append(profit);
+            summary.append("Ganancia: ").append(x.profit);
         }
-        if (!qty.isEmpty()) {
+        if (!x.qty.isEmpty()) {
             if (summary.length() > 0) summary.append("\n");
-            summary.append("Cantidad: ").append(qty);
+            summary.append("Cantidad: ").append(x.qty);
         }
         if (summary.length() > 0) {
             TextView s = UiKit.text(this, summary.toString(), 14, UiKit.TEXT, false);
@@ -308,9 +359,10 @@ public class HistoryActivity extends Activity {
 
     private String valueFor(String message, String prefix) {
         if (message == null) return "";
+        String wanted = prefix.toLowerCase(Locale.ROOT);
         for (String line : message.split("\\r?\\n")) {
             String t = line.trim();
-            if (t.toLowerCase(Locale.ROOT).startsWith(prefix.toLowerCase(Locale.ROOT))) return t.substring(prefix.length()).trim();
+            if (t.toLowerCase(Locale.ROOT).startsWith(wanted)) return t.substring(prefix.length()).trim();
         }
         return "";
     }
@@ -334,12 +386,15 @@ public class HistoryActivity extends Activity {
     }
 
     @Override protected void onStop() {
+        handler.removeCallbacks(delayedRefresh);
+        handler.removeCallbacks(searchRender);
         try { unregisterReceiver(receiver); } catch (Exception ignored) {}
         super.onStop();
     }
 
     @Override protected void onResume() {
         super.onResume();
+        visibleLimit = PAGE_SIZE;
         refresh();
     }
 }
