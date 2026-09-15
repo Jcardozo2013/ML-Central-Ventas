@@ -14,13 +14,13 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 
-        <activity android:name=".DiagnosticActivity" android:exported="true" android:label="Diagnóstico ML Central">
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".MainActivity" android:exported="false" />
+        <activity android:name=".DiagnosticActivity" android:exported="false" android:label="Diagnóstico ML Central" />
         <activity android:name=".SettingsActivity" android:exported="false" android:label="Configuración" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".StatusActivity" android:exported="false" android:label="Estados" />
@@ -30,9 +30,8 @@
             android:name=".SaleListenerService"
             android:enabled="true"
             android:exported="false"
-            android:process=":ventas_diag"
             android:stopWithTask="false" />
-        <receiver android:name=".BootReceiver" android:enabled="false" android:exported="false">
+        <receiver android:name=".BootReceiver" android:enabled="true" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
