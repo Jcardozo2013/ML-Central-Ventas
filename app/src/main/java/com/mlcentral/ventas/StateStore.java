@@ -114,6 +114,11 @@ public final class StateStore {
                 .putString(LAST_STATUS_KEY, "Estados sincronizados: " + received)
                 .putLong(LAST_STATUS_AT_KEY, now)
                 .apply();
+
+        // Estados es la fuente autoritativa de ventas válidas. Si una orden
+        // llegó aquí pero faltó su mensaje de historial (caso STOCK LOCAL),
+        // completamos únicamente ese registro faltante por order_id.
+        HistoryRestore.backfillFromStateObject(c, sales);
         return true;
     }
 
