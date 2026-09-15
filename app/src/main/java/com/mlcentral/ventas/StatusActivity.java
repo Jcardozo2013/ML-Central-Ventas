@@ -6,9 +6,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -16,12 +19,18 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 public class StatusActivity extends Activity {
     private static final String[] STAGES = {
@@ -32,15 +41,21 @@ public class StatusActivity extends Activity {
             "Pendientes compra BR", "Comprados", "Ventas en stock", "En camino BR", "Llegaron BR",
             "Pendiente Rocha", "A Rocha", "Enviados", "Entregadas"
     };
+    private static final int PAGE_SIZE = 40;
+    private static final String PENDING_KEY = "pending_state_commands_v1";
 
     private LinearLayout cards;
     private LinearLayout list;
     private TextView syncStatus;
     private TextView listTitle;
     private String filter = "all";
+    private int visibleLimit = PAGE_SIZE;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final SimpleDateFormat cardDateFormat = new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault());
 
+    private final Runnable delayedRefresh = this::refresh;
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) { refresh(); }
+        @Override public void onReceive(Context context, Intent intent) { scheduleRefresh(250); }
     };
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -48,8 +63,6 @@ public class StatusActivity extends Activity {
         String incoming = getIntent() == null ? "" : getIntent().getStringExtra("stage");
         if (incoming != null && !incoming.trim().isEmpty()) filter = incoming.trim();
         buildUi();
-        StateSync.requestSnapshotAsync(this, false);
-        StateSync.flushPendingAsync(this);
         refresh();
     }
 
@@ -85,7 +98,7 @@ public class StatusActivity extends Activity {
             StateSync.flushPendingAsync(this);
             StateStore.setStatus(this, "Estados PC: actualización solicitada…");
             Toast.makeText(this, "Solicitud enviada a ML Central Windows", Toast.LENGTH_SHORT).show();
-            refresh();
+            scheduleRefresh(50);
         });
         statusCard.addView(sync, UiKit.fullWidth(this, 12, 0));
         Button movements = UiKit.button(this, "Movimientos / Deshacer");
@@ -106,7 +119,7 @@ public class StatusActivity extends Activity {
         heading.addView(listTitle, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         Button all = UiKit.button(this, "Ver todas");
         all.setTextSize(13);
-        all.setOnClickListener(v -> { filter = "all"; refresh(); });
+        all.setOnClickListener(v -> setFilter("all"));
         heading.addView(all, new LinearLayout.LayoutParams(UiKit.dp(this, 105), LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(heading, UiKit.fullWidth(this, 10, 9));
 
@@ -118,25 +131,66 @@ public class StatusActivity extends Activity {
         setContentView(shell);
     }
 
+    private void setFilter(String stage) {
+        filter = stage == null || stage.trim().isEmpty() ? "all" : stage.trim();
+        visibleLimit = PAGE_SIZE;
+        scheduleRefresh(0);
+    }
+
+    private void scheduleRefresh(long delayMs) {
+        handler.removeCallbacks(delayedRefresh);
+        handler.postDelayed(delayedRefresh, Math.max(0L, delayMs));
+    }
+
+    /**
+     * v1.36: una sola lectura/ordenamiento del tablero por refresco.
+     * Antes countStage() volvía a parsear y ordenar todo el JSON por cada botón.
+     */
     private void refresh() {
-        renderCards();
-        renderList();
-        int pending = StateSync.pendingCount(this);
+        List<JSONObject> allRows = StateStore.allSales(this);
+        Map<String, Integer> counts = new HashMap<>();
+        for (String stage : STAGES) counts.put(stage, 0);
+        for (JSONObject row : allRows) {
+            if (row == null) continue;
+            String stage = row.optString("stage", "");
+            if (counts.containsKey(stage)) counts.put(stage, counts.get(stage) + 1);
+        }
+
+        Set<String> pendingOrders = readPendingOrderIds();
+        renderCards(counts);
+        renderList(allRows, pendingOrders);
+
         String text = StateStore.statusText(this);
+        int pending = pendingOrders.size();
         if (pending > 0) text += " · " + pending + (pending == 1 ? " cambio pendiente" : " cambios pendientes");
         syncStatus.setText(text);
     }
 
-    private void renderCards() {
+    private Set<String> readPendingOrderIds() {
+        HashSet<String> out = new HashSet<>();
+        try {
+            SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+            JSONArray arr = new JSONArray(p.getString(PENDING_KEY, "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject row = arr.optJSONObject(i);
+                if (row == null) continue;
+                String oid = row.optString("order_id", "").trim();
+                if (!oid.isEmpty()) out.add(oid);
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private void renderCards(Map<String, Integer> counts) {
         cards.removeAllViews();
         for (int i = 0; i < STAGES.length; i += 2) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.addView(stageButton(i), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(stageButton(i, counts), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             if (i + 1 < STAGES.length) {
                 LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
                 p.setMargins(UiKit.dp(this, 8), 0, 0, 0);
-                row.addView(stageButton(i + 1), p);
+                row.addView(stageButton(i + 1, counts), p);
             } else {
                 row.addView(new TextView(this), new LinearLayout.LayoutParams(0, 1, 1f));
             }
@@ -144,9 +198,9 @@ public class StatusActivity extends Activity {
         }
     }
 
-    private Button stageButton(int index) {
+    private Button stageButton(int index, Map<String, Integer> counts) {
         String stage = STAGES[index];
-        int count = StateStore.countStage(this, stage);
+        int count = counts.containsKey(stage) ? counts.get(stage) : 0;
         Button b = UiKit.button(this, LABELS[index] + "\n" + count);
         b.setTextSize(14);
         b.setGravity(Gravity.CENTER);
@@ -155,30 +209,50 @@ public class StatusActivity extends Activity {
             b.setTextColor(Color.WHITE);
             b.setBackground(UiKit.rounded(UiKit.ACCENT, 14, this));
         }
-        b.setOnClickListener(v -> { filter = stage; refresh(); });
+        b.setOnClickListener(v -> setFilter(stage));
         return b;
     }
 
-    private void renderList() {
+    private void renderList(List<JSONObject> allRows, Set<String> pendingOrders) {
         list.removeAllViews();
         String label = "Todas las ventas";
         for (int i = 0; i < STAGES.length; i++) if (STAGES[i].equals(filter)) label = LABELS[i];
-        List<JSONObject> rows = StateStore.salesForStage(this, filter);
-        listTitle.setText(label + " · " + rows.size());
+
+        ArrayList<JSONObject> rows = new ArrayList<>();
+        for (JSONObject row : allRows) {
+            if (row == null) continue;
+            if ("all".equals(filter) || filter.equals(row.optString("stage", ""))) rows.add(row);
+        }
+
+        int shown = Math.min(visibleLimit, rows.size());
+        listTitle.setText(label + " · " + rows.size() + (shown < rows.size() ? " · mostrando " + shown : ""));
         if (rows.isEmpty()) {
             LinearLayout empty = UiKit.card(this);
             TextView t = UiKit.text(this,
-                    StateStore.total(this) == 0 ? "Esperando el primer tablero de Windows…" : "No hay ventas en este estado.",
+                    allRows.isEmpty() ? "Esperando el primer tablero de Windows…" : "No hay ventas en este estado.",
                     15, UiKit.MUTED, false);
             t.setGravity(Gravity.CENTER);
             empty.addView(t);
             list.addView(empty);
             return;
         }
-        for (JSONObject row : rows) list.addView(saleCard(row), UiKit.fullWidth(this, 0, 9));
+
+        for (int i = 0; i < shown; i++) {
+            list.addView(saleCard(rows.get(i), pendingOrders), UiKit.fullWidth(this, 0, 9));
+        }
+
+        if (shown < rows.size()) {
+            int remaining = rows.size() - shown;
+            Button more = UiKit.button(this, "Mostrar " + Math.min(PAGE_SIZE, remaining) + " más · quedan " + remaining);
+            more.setOnClickListener(v -> {
+                visibleLimit += PAGE_SIZE;
+                scheduleRefresh(0);
+            });
+            list.addView(more, UiKit.fullWidth(this, 4, 12));
+        }
     }
 
-    private LinearLayout saleCard(JSONObject row) {
+    private LinearLayout saleCard(JSONObject row, Set<String> pendingOrders) {
         LinearLayout card = UiKit.card(this);
         String stage = row.optString("stage", "other");
         String orderId = row.optString("order_id", "");
@@ -188,9 +262,8 @@ public class StatusActivity extends Activity {
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView stagePill = pillForStage(stage, row.optString("stage_label", stage));
         top.addView(stagePill);
-        String when = row.optLong("sale_unix", 0L) > 0
-                ? new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(new Date(row.optLong("sale_unix") * 1000L))
-                : "";
+        long saleUnix = row.optLong("sale_unix", 0L);
+        String when = saleUnix > 0 ? cardDateFormat.format(new Date(saleUnix * 1000L)) : "";
         TextView date = UiKit.text(this, when, 12, UiKit.MUTED, false);
         date.setGravity(Gravity.END);
         LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
@@ -210,7 +283,7 @@ public class StatusActivity extends Activity {
         TextView detail = UiKit.text(this, info.toString(), 13, UiKit.MUTED, false);
         card.addView(detail);
 
-        boolean pending = StateSync.hasPendingForOrder(this, orderId);
+        boolean pending = pendingOrders.contains(orderId);
         String action = actionForStage(stage);
         if (pending) {
             TextView p = UiKit.pill(this, "PENDIENTE DE SINCRONIZAR", UiKit.ORANGE, UiKit.ORANGE_SOFT);
@@ -264,7 +337,7 @@ public class StatusActivity extends Activity {
                 .setPositiveButton("Confirmar", (d, w) -> {
                     StateSync.queueAction(this, oid, action, stage);
                     Toast.makeText(this, "Cambio guardado · esperando confirmación de la PC", Toast.LENGTH_LONG).show();
-                    refresh();
+                    scheduleRefresh(100);
                 })
                 .show();
     }
@@ -279,11 +352,17 @@ public class StatusActivity extends Activity {
         super.onResume();
         StateSync.requestSnapshotAsync(this, false);
         StateSync.flushPendingAsync(this);
-        refresh();
+        scheduleRefresh(100);
     }
 
     @Override protected void onStop() {
+        handler.removeCallbacks(delayedRefresh);
         try { unregisterReceiver(receiver); } catch (Exception ignored) {}
         super.onStop();
+    }
+
+    @Override protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 }
