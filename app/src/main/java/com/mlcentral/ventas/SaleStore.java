@@ -277,7 +277,14 @@ public final class SaleStore {
         catch (Exception e) { return new JSONArray(); }
     }
 
+    private static StateStore.Summary validSummary(Context c) {
+        if (StateStore.lastSyncAt(c) <= 0L) return null;
+        return StateStore.summary(c);
+    }
+
     public static synchronized int todaySaleCount(Context c) {
+        StateStore.Summary s = validSummary(c);
+        if (s != null) return s.todaySales;
         int count = 0;
         JSONArray arr = historyArray(c);
         for (int i = 0; i < arr.length(); i++) {
@@ -288,6 +295,8 @@ public final class SaleStore {
     }
 
     public static synchronized double todayProfit(Context c) {
+        StateStore.Summary s = validSummary(c);
+        if (s != null) return s.todayProfit;
         double total = 0.0;
         JSONArray arr = historyArray(c);
         for (int i = 0; i < arr.length(); i++) {
@@ -300,6 +309,8 @@ public final class SaleStore {
     }
 
     public static synchronized int todayPendingProfitCount(Context c) {
+        StateStore.Summary s = validSummary(c);
+        if (s != null) return s.todayPendingProfit;
         int count = 0;
         JSONArray arr = historyArray(c);
         for (int i = 0; i < arr.length(); i++) {
@@ -311,6 +322,8 @@ public final class SaleStore {
     }
 
     public static synchronized double monthProfit(Context c) {
+        StateStore.Summary s = validSummary(c);
+        if (s != null) return s.monthProfit;
         double total = 0.0;
         JSONArray arr = historyArray(c);
         for (int i = 0; i < arr.length(); i++) {
@@ -323,6 +336,8 @@ public final class SaleStore {
     }
 
     public static synchronized int monthPendingProfitCount(Context c) {
+        StateStore.Summary s = validSummary(c);
+        if (s != null) return s.monthPendingProfit;
         int count = 0;
         JSONArray arr = historyArray(c);
         for (int i = 0; i < arr.length(); i++) {
