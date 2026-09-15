@@ -13,7 +13,6 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
 import android.widget.Button;
@@ -26,11 +25,8 @@ import android.widget.Toast;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
-import org.json.JSONObject;
-
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
@@ -47,53 +43,43 @@ public class MainActivity extends Activity {
     private TextView pendingRocha;
     private TextView delivered;
     private TextView todayHistory;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Handler handler = new Handler();
     private boolean loginDialogShowing = false;
+    private boolean syncStarted = false;
 
-    // La pantalla ya no dispara sincronizaciones de Firebase. El servicio es la única
-    // fuente de sincronización; la Activity solamente actualiza lo visible.
-    private final Runnable periodicRefresh = new Runnable() {
+    private final Runnable historyRetry = new Runnable() {
         @Override public void run() {
-            safeRefresh();
-            handler.postDelayed(this, 30000L);
+            if (FirebaseTransport.signedIn(MainActivity.this)) {
+                ReadSync.requestHistoryOnceAsync(MainActivity.this);
+                StateSync.requestSnapshotAsync(MainActivity.this, false);
+                StateSync.flushPendingAsync(MainActivity.this);
+            }
+            refresh();
+            handler.postDelayed(this, 120000L);
         }
     };
 
-    private final Runnable delayedRefresh = new Runnable() {
-        @Override public void run() { safeRefresh(); }
-    };
-
     private final BroadcastReceiver saleReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) { scheduleRefresh(); }
+        @Override public void onReceive(Context context, Intent intent) { refresh(); }
     };
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        try { FirebaseConfig.ensureInitialized(this); } catch (Throwable ignored) {}
+        FirebaseConfig.ensureInitialized(this);
         buildUi();
         requestNotificationsIfNeeded();
         ensureFirebaseLogin();
-        safeRefresh();
+        refresh();
     }
 
     private void ensureFirebaseLogin() {
-        try {
-            FirebaseConfig.ensureInitialized(this);
-            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-            if (user != null && FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
-                startAfterLogin();
-                return;
-            }
-            if (user != null) FirebaseAuth.getInstance().signOut();
-            showFirebaseLogin();
-        } catch (Throwable error) {
-            try {
-                getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit()
-                        .putString("firebase_login_error", error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage()))
-                        .apply();
-            } catch (Throwable ignored) {}
-            scheduleRefresh();
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user != null && FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
+            startAfterLogin();
+            return;
         }
+        if (user != null) FirebaseAuth.getInstance().signOut();
+        showFirebaseLogin();
     }
 
     private void showFirebaseLogin() {
@@ -136,39 +122,29 @@ public class MainActivity extends Activity {
                 return;
             }
             dlg.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-            try {
-                FirebaseConfig.ensureInitialized(this);
-                FirebaseAuth.getInstance().signInWithEmailAndPassword(mail, pass).addOnCompleteListener(this, task -> {
-                    try {
-                        dlg.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                        if (!task.isSuccessful()) {
-                            String msg = task.getException() == null ? "No se pudo iniciar sesión" : task.getException().getMessage();
-                            Toast.makeText(this, "Firebase: " + msg, Toast.LENGTH_LONG).show();
-                            return;
-                        }
-                        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-                        if (user == null || !FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
-                            FirebaseAuth.getInstance().signOut();
-                            Toast.makeText(this, "Ese usuario no está autorizado para ML Central", Toast.LENGTH_LONG).show();
-                            return;
-                        }
-                        getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit().putString("firebase_login_email", mail).apply();
-                        loginDialogShowing = false;
-                        dlg.dismiss();
-                        startAfterLogin();
-                        scheduleRefresh();
-                    } catch (Throwable ignored) {
-                        try { dlg.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true); } catch (Throwable ignored2) {}
-                    }
-                });
-            } catch (Throwable error) {
+            FirebaseAuth.getInstance().signInWithEmailAndPassword(mail, pass).addOnCompleteListener(this, task -> {
                 dlg.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                Toast.makeText(this, "Firebase no pudo iniciar. La app seguirá abierta.", Toast.LENGTH_LONG).show();
-            }
+                if (!task.isSuccessful()) {
+                    String msg = task.getException() == null ? "No se pudo iniciar sesión" : task.getException().getMessage();
+                    Toast.makeText(this, "Firebase: " + msg, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+                if (user == null || !FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
+                    FirebaseAuth.getInstance().signOut();
+                    Toast.makeText(this, "Ese usuario no está autorizado para ML Central", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit().putString("firebase_login_email", mail).apply();
+                loginDialogShowing = false;
+                dlg.dismiss();
+                startAfterLogin();
+                refresh();
+            });
         }));
         dlg.setOnDismissListener(x -> {
             loginDialogShowing = false;
-            scheduleRefresh();
+            refresh();
         });
         dlg.show();
     }
@@ -176,6 +152,12 @@ public class MainActivity extends Activity {
     private void startAfterLogin() {
         if (!FirebaseTransport.signedIn(this)) return;
         startListener();
+        if (!syncStarted) {
+            syncStarted = true;
+            ReadSync.requestHistoryOnceAsync(this);
+            StateSync.requestSnapshotAsync(this, true);
+            StateSync.flushPendingAsync(this);
+        }
     }
 
     private void buildUi() {
@@ -348,7 +330,7 @@ public class MainActivity extends Activity {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
             else startService(i);
-        } catch (Throwable ignored) {}
+        } catch (Exception ignored) {}
     }
 
     private String pendingSuffix(int n) {
@@ -356,24 +338,7 @@ public class MainActivity extends Activity {
         return n == 1 ? "\n1 pendiente" : "\n" + n + " pendientes";
     }
 
-    private void scheduleRefresh() {
-        handler.removeCallbacks(delayedRefresh);
-        handler.postDelayed(delayedRefresh, 250L);
-    }
-
-    private void safeRefresh() {
-        try {
-            refreshInternal();
-        } catch (Throwable error) {
-            try {
-                getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit()
-                        .putString("ui_refresh_error_v131", error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage()))
-                        .apply();
-            } catch (Throwable ignored) {}
-        }
-    }
-
-    private void refreshInternal() {
+    private void refresh() {
         int n = SaleStore.unread(this);
         unread.setText(n == 1 ? "1 venta nueva · VER" : n + " ventas nuevas" + (n > 0 ? " · VER" : ""));
         unread.setEnabled(n > 0);
@@ -421,50 +386,37 @@ public class MainActivity extends Activity {
         todaySales.setText(String.valueOf(SaleStore.todaySaleCount(this)));
         todayProfit.setText(SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
         monthProfit.setText(SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
-
-        // Leer y ordenar los estados una sola vez. Antes se parseaba el JSON completo
-        // cuatro veces en cada refresco, algo costoso en celulares más lentos.
-        int purchase = 0;
-        int transit = 0;
-        int rocha = 0;
-        int done = 0;
-        List<JSONObject> states = StateStore.allSales(this);
-        for (JSONObject row : states) {
-            String stage = row == null ? "" : row.optString("stage", "");
-            if ("purchase_pending".equals(stage)) purchase++;
-            else if ("receive_pending".equals(stage)) transit++;
-            else if ("pending_rocha".equals(stage)) rocha++;
-            else if ("delivered".equals(stage)) done++;
-        }
-        pendingBuy.setText(String.valueOf(purchase));
-        inTransit.setText(String.valueOf(transit));
-        pendingRocha.setText(String.valueOf(rocha));
-        delivered.setText(String.valueOf(done));
+        pendingBuy.setText(String.valueOf(StateStore.countStage(this, "purchase_pending")));
+        inTransit.setText(String.valueOf(StateStore.countStage(this, "receive_pending")));
+        pendingRocha.setText(String.valueOf(StateStore.countStage(this, "pending_rocha")));
+        delivered.setText(String.valueOf(StateStore.countStage(this, "delivered")));
         todayHistory.setText(SaleStore.todayHistoryText(this));
     }
 
     @Override protected void onStart() {
         super.onStart();
-        try {
-            IntentFilter f = new IntentFilter("com.mlcentral.ventas.SALE_RECEIVED");
-            if (Build.VERSION.SDK_INT >= 33) registerReceiver(saleReceiver, f, Context.RECEIVER_NOT_EXPORTED);
-            else registerReceiver(saleReceiver, f);
-        } catch (Throwable ignored) {}
-        handler.removeCallbacks(periodicRefresh);
-        handler.post(periodicRefresh);
+        IntentFilter f = new IntentFilter("com.mlcentral.ventas.SALE_RECEIVED");
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(saleReceiver, f, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(saleReceiver, f);
+        handler.removeCallbacks(historyRetry);
+        handler.post(historyRetry);
     }
 
     @Override protected void onStop() {
-        handler.removeCallbacks(periodicRefresh);
-        handler.removeCallbacks(delayedRefresh);
-        try { unregisterReceiver(saleReceiver); } catch (Throwable ignored) {}
+        handler.removeCallbacks(historyRetry);
+        try { unregisterReceiver(saleReceiver); } catch (Exception ignored) {}
         super.onStop();
     }
 
     @Override protected void onResume() {
         super.onResume();
-        if (FirebaseTransport.signedIn(this)) startAfterLogin();
-        else ensureFirebaseLogin();
-        scheduleRefresh();
+        if (FirebaseTransport.signedIn(this)) {
+            startAfterLogin();
+            ReadSync.requestHistoryOnceAsync(this);
+            StateSync.requestSnapshotAsync(this, false);
+            StateSync.flushPendingAsync(this);
+        } else {
+            ensureFirebaseLogin();
+        }
+        refresh();
     }
 }
