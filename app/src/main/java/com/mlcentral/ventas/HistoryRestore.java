@@ -80,6 +80,83 @@ public final class HistoryRestore {
         p.edit().putString("history", out.toString()).apply();
     }
 
+    private static String displayFromState(JSONObject row) {
+        if (row == null) return "";
+        StringBuilder out = new StringBuilder();
+        String product = row.optString("product", "").trim();
+        if (!product.isEmpty()) out.append("Producto: ").append(product);
+
+        int qty = Math.max(1, row.optInt("quantity", 1));
+        if (out.length() > 0) out.append("\n");
+        out.append("Cantidad: ").append(qty);
+        if ("stock_local_sale".equals(row.optString("stage", ""))) out.append(" · STOCK LOCAL");
+
+        if (row.has("sale_amount") && !row.isNull("sale_amount")) {
+            out.append("\nVenta: ").append(SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)));
+        }
+
+        String orderId = row.optString("order_id", "").trim();
+        if (!orderId.isEmpty()) out.append("\nOrden: ").append(orderId);
+
+        if (row.has("profit") && !row.isNull("profit")) {
+            out.append("\nGanancia: ").append(SaleStore.formatMoney(row.optDouble("profit", 0.0)));
+        }
+        return out.toString();
+    }
+
+    private static int backfillRows(Context context, List<JSONObject> rows) {
+        if (rows == null || rows.isEmpty()) return 0;
+        Context app = context.getApplicationContext();
+        SharedPreferences p = prefs(app);
+        JSONArray old;
+        try { old = new JSONArray(p.getString("history", "[]")); }
+        catch (Exception e) { old = new JSONArray(); }
+
+        Map<String, JSONObject> byId = new LinkedHashMap<>();
+        for (int i = 0; i < old.length(); i++) {
+            JSONObject o = old.optJSONObject(i);
+            if (o == null) continue;
+            String sid = o.optString("saleId", "").trim();
+            if (!sid.isEmpty() && !byId.containsKey(sid)) byId.put(sid, o);
+        }
+
+        ArrayList<String> added = new ArrayList<>();
+        for (JSONObject row : rows) {
+            if (row == null) continue;
+            String oid = row.optString("order_id", "").trim();
+            if (oid.isEmpty() || byId.containsKey(oid)) continue;
+            byId.put(oid, makeItem(oid, displayFromState(row), row.optLong("sale_unix", 0L)));
+            added.add(oid);
+        }
+
+        if (added.isEmpty()) return 0;
+        writeSortedHistory(p, byId);
+        for (String oid : added) SaleStore.markSeen(app, oid);
+        return added.size();
+    }
+
+    /**
+     * v1.40: Estados y Historial viajan por mensajes separados. Si una venta
+     * válida (por ejemplo STOCK LOCAL) llegó al tablero pero faltó el mensaje
+     * histórico, la recuperamos por order_id sin borrar ni duplicar registros.
+     */
+    public static synchronized int backfillFromStateObject(Context context, JSONObject sales) {
+        if (sales == null || sales.length() == 0) return 0;
+        ArrayList<JSONObject> rows = new ArrayList<>();
+        JSONArray names = sales.names();
+        if (names != null) {
+            for (int i = 0; i < names.length(); i++) {
+                JSONObject row = sales.optJSONObject(names.optString(i));
+                if (row != null) rows.add(row);
+            }
+        }
+        return backfillRows(context, rows);
+    }
+
+    public static synchronized int backfillFromCurrentStates(Context context) {
+        return backfillRows(context, StateStore.allSales(context));
+    }
+
     public static void upsert(Context context, String orderId, String display, long saleUnix) {
         upsertInternal(context, orderId, display, saleUnix);
         prefs(context).edit().putBoolean("history_restore_done_v1", true).apply();
@@ -102,8 +179,6 @@ public final class HistoryRestore {
             if (startedAt > 0L && now - startedAt < ACTIVE_STALE_MS) return;
         }
 
-        // Aceptamos una restauración nueva aunque haya existido una anterior.
-        // El request_id define cuál lote está activo.
         fullBuffer.clear();
         fullBufferRequestId = rid;
 
@@ -147,14 +222,9 @@ public final class HistoryRestore {
         long restoreStartedAt = p.getLong("full_history_started_at_v3", 0L);
 
         if (complete && rid.equals(fullBufferRequestId)) {
-            // El lote recibido desde Windows reemplaza el historial anterior.
-            // Así desaparecen ventas locales antiguas/corregidas que ya no
-            // existen en la fuente central y no vuelven a inflar ganancias.
             Map<String, JSONObject> byId = new LinkedHashMap<>();
             byId.putAll(fullBuffer);
 
-            // Si una venta nueva llegó en vivo durante la restauración y aún no
-            // estaba incluida en el snapshot de Windows, la conservamos.
             if (restoreStartedAt > 0L) {
                 try {
                     JSONArray old = new JSONArray(p.getString("history", "[]"));
@@ -182,7 +252,6 @@ public final class HistoryRestore {
             e.putString("full_history_active_request_v3", "")
                     .putLong("full_history_started_at_v3", 0L);
         } else {
-            // Permitimos que ReadSync vuelva a pedir un lote limpio.
             e.putString("full_history_active_request_v3", "")
                     .putLong("full_history_started_at_v3", 0L)
                     .putLong("full_history_request_last_at_v3", 0L);
@@ -191,6 +260,10 @@ public final class HistoryRestore {
 
         fullBuffer.clear();
         fullBufferRequestId = "";
+
+        // Si Windows omitió del flujo de historial una venta que sí existe en
+        // el tablero de Estados, la recuperamos inmediatamente al terminar.
+        if (complete) backfillFromCurrentStates(app);
     }
 
     private static int historyCount(Context context) {
