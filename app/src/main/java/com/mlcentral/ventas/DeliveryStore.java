@@ -7,10 +7,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -22,16 +18,21 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Registro local de paquetes entregados. Se alimenta desde el tablero de Estados
- * que Windows ya sincroniza con la APK, por lo que sirve como respaldo aunque el
- * aviso instantáneo de Firebase no llegue a mostrarse en Android.
+ * Registro local de paquetes entregados.
+ *
+ * v1.42:
+ * - La primera sincronización crea solo la línea base y NO cuenta entregas antiguas como "hoy".
+ * - La hora de entrega se toma del evento real o del momento en que se detecta una transición
+ *   nueva a delivered; no se usa updated_at del tablero como fecha de entrega.
+ * - Usa claves nuevas v142 para descartar los falsos positivos creados por v1.41.
  */
 public final class DeliveryStore {
-    private static final String HISTORY_KEY = "delivery_history_v141";
-    private static final String KNOWN_KEY = "delivery_known_v141";
-    private static final String BASELINE_KEY = "delivery_baseline_v141";
+    private static final String HISTORY_KEY = "delivery_history_v142";
+    private static final String KNOWN_KEY = "delivery_known_v142";
+    private static final String BASELINE_KEY = "delivery_baseline_v142";
     private static final int MAX_HISTORY = 500;
     private static final int MAX_KNOWN = 2000;
+    private static final long DIRECT_DUP_WINDOW_SECONDS = 10 * 60L;
 
     public static final class Delivery {
         public String id = "";
@@ -65,7 +66,7 @@ public final class DeliveryStore {
         return order.isEmpty() ? "" : "order:" + order;
     }
 
-    private static Delivery fromRow(JSONObject row, long fallbackSeconds) {
+    private static Delivery fromRow(JSONObject row, long eventSeconds) {
         Delivery d = new Delivery();
         d.id = idFor(row);
         d.shipmentId = row == null ? "" : row.optString("shipment_id", "").trim();
@@ -76,25 +77,8 @@ public final class DeliveryStore {
             try { d.sale = SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)); }
             catch (Exception ignored) {}
         }
-        long parsed = parseUpdatedAt(row == null ? "" : row.optString("updated_at", ""));
-        d.time = parsed > 0L ? parsed : (fallbackSeconds > 0L ? fallbackSeconds : System.currentTimeMillis() / 1000L);
+        d.time = eventSeconds > 0L ? eventSeconds : System.currentTimeMillis() / 1000L;
         return d;
-    }
-
-    private static long parseUpdatedAt(String raw) {
-        String s = raw == null ? "" : raw.trim();
-        if (s.isEmpty()) return 0L;
-        try { return Instant.parse(s).getEpochSecond(); } catch (Exception ignored) {}
-        try { return OffsetDateTime.parse(s).toEpochSecond(); } catch (Exception ignored) {}
-        try { return LocalDateTime.parse(s).atZone(ZoneId.systemDefault()).toEpochSecond(); } catch (Exception ignored) {}
-        String[] patterns = {"yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS"};
-        for (String pattern : patterns) {
-            try {
-                Date d = new SimpleDateFormat(pattern, Locale.US).parse(s);
-                if (d != null) return d.getTime() / 1000L;
-            } catch (Exception ignored) {}
-        }
-        return 0L;
     }
 
     private static boolean isToday(long seconds) {
@@ -154,21 +138,80 @@ public final class DeliveryStore {
         d.shipmentId = o.optString("shipment_id", "").trim();
         d.orderId = o.optString("order_id", "").trim();
         d.product = o.optString("product", "Producto").trim();
+        if (d.product.isEmpty()) d.product = "Producto";
         d.sale = o.optString("sale", "").trim();
         d.time = o.optLong("time", 0L);
         return d;
     }
 
+    private static long recordedAt(Context c, String id) {
+        if (id == null || id.trim().isEmpty()) return 0L;
+        JSONArray arr = history(c);
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && id.trim().equals(o.optString("id", "").trim())) return o.optLong("time", 0L);
+        }
+        return 0L;
+    }
+
+    private static JSONObject findStateRow(Context c, String id) {
+        String wanted = id == null ? "" : id.trim();
+        String bare = wanted.startsWith("order:") ? wanted.substring("order:".length()) : wanted;
+        for (JSONObject row : StateStore.allSales(c)) {
+            if (row == null) continue;
+            String shipment = row.optString("shipment_id", "").trim();
+            String order = row.optString("order_id", "").trim();
+            if (!bare.isEmpty() && (bare.equals(shipment) || bare.equals(order))) return row;
+        }
+        return null;
+    }
+
+    /** Guarda el evento real de PAQUETE ENTREGADO recibido desde Firebase. */
+    public static synchronized void recordDirectEvent(Context c, String eventId, String message, long unixSeconds) {
+        String id = eventId == null ? "" : eventId.trim();
+        if (id.isEmpty()) return;
+        long when = unixSeconds > 0L ? unixSeconds : System.currentTimeMillis() / 1000L;
+
+        JSONObject row = findStateRow(c, id);
+        Delivery d;
+        if (row != null) {
+            d = fromRow(row, when);
+            if (d.id == null || d.id.trim().isEmpty()) d.id = id;
+        } else {
+            d = new Delivery();
+            d.id = id;
+            d.time = when;
+            d.product = firstUsefulLine(message);
+        }
+        d.time = when;
+        record(c, d);
+    }
+
+    private static String firstUsefulLine(String message) {
+        if (message == null || message.trim().isEmpty()) return "Paquete entregado";
+        String[] lines = message.split("\\r?\\n");
+        for (String line : lines) {
+            String s = line == null ? "" : line.trim();
+            if (s.isEmpty()) continue;
+            String lower = s.toLowerCase(Locale.ROOT);
+            if (lower.startsWith("orden") || lower.startsWith("order") || lower.startsWith("venta:")
+                    || lower.startsWith("envío") || lower.startsWith("envio") || lower.startsWith("shipment")
+                    || lower.startsWith("estado")) continue;
+            return s;
+        }
+        return "Paquete entregado";
+    }
+
     /**
-     * Compara el tablero actual con el último tablero conocido. La primera vez
-     * solo crea una línea base para no avisar decenas de entregas antiguas, pero
-     * sí guarda las que parecen haberse actualizado hoy para que la tarjeta las muestre.
+     * Primera ejecución: solo guarda los IDs ya entregados como línea base.
+     * Ejecuciones siguientes: current delivered - previous delivered = entregas nuevas.
      */
     public static synchronized List<Delivery> reconcile(Context c) {
         Context app = c.getApplicationContext();
         SharedPreferences p = prefs(app);
-        Set<String> known = new HashSet<>(p.getStringSet(KNOWN_KEY, new HashSet<>()));
+        Set<String> previous = new HashSet<>(p.getStringSet(KNOWN_KEY, new HashSet<>()));
         boolean baselineReady = p.getBoolean(BASELINE_KEY, false);
+        Set<String> current = new HashSet<>();
         ArrayList<Delivery> newlyDelivered = new ArrayList<>();
         long nowSeconds = System.currentTimeMillis() / 1000L;
 
@@ -176,31 +219,30 @@ public final class DeliveryStore {
             if (row == null || !"delivered".equals(row.optString("stage", "").trim())) continue;
             String id = idFor(row);
             if (id.isEmpty()) continue;
-            boolean wasKnown = known.contains(id);
-            Delivery d = fromRow(row, nowSeconds);
+            current.add(id);
 
-            if (!baselineReady) {
-                if (isToday(d.time)) record(app, d);
-            } else if (!wasKnown) {
+            if (baselineReady && !previous.contains(id)) {
+                Delivery d = fromRow(row, nowSeconds);
+                long oldTime = recordedAt(app, id);
+                boolean alreadyNotifiedDirectly = oldTime > 0L && Math.abs(nowSeconds - oldTime) <= DIRECT_DUP_WINDOW_SECONDS;
                 record(app, d);
-                newlyDelivered.add(d);
+                if (!alreadyNotifiedDirectly) newlyDelivered.add(d);
             }
-            known.add(id);
         }
 
-        if (known.size() > MAX_KNOWN) {
-            // El tablero actual es la mejor referencia para conservar identificadores útiles.
+        if (current.size() > MAX_KNOWN) {
             Set<String> trimmed = new HashSet<>();
-            for (JSONObject row : StateStore.allSales(app)) {
-                if (row == null || !"delivered".equals(row.optString("stage", "").trim())) continue;
-                String id = idFor(row);
-                if (!id.isEmpty()) trimmed.add(id);
+            int n = 0;
+            for (String id : current) {
+                if (id == null || id.trim().isEmpty()) continue;
+                trimmed.add(id.trim());
+                if (++n >= MAX_KNOWN) break;
             }
-            known = trimmed;
+            current = trimmed;
         }
 
-        p.edit().putStringSet(KNOWN_KEY, known).putBoolean(BASELINE_KEY, true).apply();
-        return newlyDelivered;
+        p.edit().putStringSet(KNOWN_KEY, current).putBoolean(BASELINE_KEY, true).apply();
+        return baselineReady ? newlyDelivered : Collections.emptyList();
     }
 
     public static synchronized int todayCount(Context c) {
