@@ -1,7 +1,18 @@
 package com.mlcentral.ventas;
 
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Build;
+
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
+
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -10,18 +21,29 @@ import java.io.StringWriter;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Servicio de ventas protegido. Desde v1.35 no reutiliza cursores antiguos al
  * arrancar: Firebase se posiciona primero en el final del canal y después la
  * app solicita historial/estados por el protocolo normal. Esto evita que un
  * teléfono intente reproducir miles de eventos acumulados de una sola vez.
+ *
+ * v1.44 mantiene esa protección, pero recupera únicamente ventas recientes
+ * que hayan entrado mientras Android/Xiaomi tenía el servicio detenido.
  */
 public class SaleListenerService extends FirebaseListenerService {
     public static final String CRASH_FILE = "mlcentral_service_crash_v135.txt";
     public static final String EVENT_FILE = "mlcentral_service_event_v135.txt";
 
+    private static final long WATCHDOG_MS = 10 * 60 * 1000L;
+    private static final long RECOVERY_WINDOW_MS = 2 * 60 * 60 * 1000L;
+    private static final int RECOVERY_LIMIT = 50;
+
     private Thread.UncaughtExceptionHandler previousHandler;
+    private volatile boolean recoveryStarted = false;
 
     @Override public void onCreate() {
         installCrashCapture();
@@ -42,30 +64,161 @@ public class SaleListenerService extends FirebaseListenerService {
         }
 
         super.onCreate();
+        ServiceWatchdogReceiver.schedule(this, WATCHDOG_MS);
         writeEvent("onCreate: OK");
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         writeEvent("onStartCommand: entrando");
+        ServiceWatchdogReceiver.schedule(this, WATCHDOG_MS);
         try {
             int result = super.onStartCommand(intent, flags, startId);
+            if (!recoveryStarted) {
+                recoveryStarted = true;
+                recoverRecentMissedSales();
+            }
             writeEvent("onStartCommand: OK result=" + result);
             return result;
         } catch (Throwable error) {
             writeCrash("onStartCommand", error);
             writeEvent("onStartCommand: ERROR capturado " + error.getClass().getName());
             try { stopSelf(startId); } catch (Throwable ignored) {}
+            ServiceWatchdogReceiver.schedule(this, 60_000L);
             return START_NOT_STICKY;
         }
     }
 
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        writeEvent("onTaskRemoved: programando respaldo");
+        ServiceWatchdogReceiver.schedule(this, 60_000L);
+        super.onTaskRemoved(rootIntent);
+    }
+
     @Override public void onDestroy() {
         writeEvent("onDestroy");
+        ServiceWatchdogReceiver.schedule(this, 60_000L);
         try {
             super.onDestroy();
         } catch (Throwable error) {
             writeCrash("onDestroy", error);
         }
+    }
+
+    /**
+     * Recupera solo ventas recientes no vistas. No reproduce snapshots de
+     * Estados/Historial y limita la consulta a los últimos mensajes del canal.
+     */
+    @SuppressWarnings("unchecked")
+    private void recoverRecentMissedSales() {
+        try {
+            FirebaseDatabase.getInstance()
+                    .getReference("channels/main")
+                    .orderByKey()
+                    .limitToLast(RECOVERY_LIMIT)
+                    .addListenerForSingleValueEvent(new ValueEventListener() {
+                        @Override public void onDataChange(DataSnapshot snapshot) {
+                            int recovered = 0;
+                            long now = System.currentTimeMillis();
+                            for (DataSnapshot child : snapshot.getChildren()) {
+                                try {
+                                    Object raw = child.getValue();
+                                    if (!(raw instanceof Map)) continue;
+                                    JSONObject o = new JSONObject((Map<String, Object>) raw);
+                                    if (!o.has("id") && child.getKey() != null) o.put("id", child.getKey());
+
+                                    String title = o.optString("title", "");
+                                    String upper = title.toUpperCase(Locale.ROOT);
+                                    if (title.startsWith("MLC_")) continue;
+                                    if (!upper.contains("VENTA") && !upper.contains("ML CENTRAL")) continue;
+                                    if (upper.contains("ACTUALIZACIÓN VENTA") || upper.contains("ACTUALIZACION VENTA")) continue;
+                                    if (upper.contains("PAQUETE ENTREGADO")) continue;
+
+                                    long seconds = o.optLong("time", 0L);
+                                    if (seconds <= 0L) continue;
+                                    long eventMs = seconds * 1000L;
+                                    long age = now - eventMs;
+                                    if (age < -5 * 60 * 1000L || age > RECOVERY_WINDOW_MS) continue;
+
+                                    String message = o.optString("message", "Venta nueva");
+                                    String saleId = recoverySaleId(o, title, message);
+                                    if (saleId.isEmpty() || SaleStore.isSeen(SaleListenerService.this, saleId)) continue;
+
+                                    boolean alreadyConfirmed = SaleStore.isAcknowledged(SaleListenerService.this, saleId);
+                                    SaleStore.markSeen(SaleListenerService.this, saleId);
+                                    SaleStore.addHistory(SaleListenerService.this, saleId,
+                                            title == null || title.trim().isEmpty() ? "🛒 NUEVA VENTA — ML CENTRAL" : title,
+                                            message, seconds);
+                                    if (!alreadyConfirmed) showRecoveredSaleNotification(saleId, title, message);
+                                    recovered++;
+                                } catch (Throwable ignored) {}
+                            }
+                            if (recovered > 0) {
+                                writeEvent("recuperación reciente: " + recovered + " venta(s)");
+                                try {
+                                    sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+                                } catch (Throwable ignored) {}
+                            }
+                        }
+
+                        @Override public void onCancelled(DatabaseError error) {
+                            writeEvent("recuperación reciente cancelada: " + (error == null ? "?" : error.getMessage()));
+                        }
+                    });
+        } catch (Throwable error) {
+            writeEvent("recuperación reciente error: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private String recoverySaleId(JSONObject o, String title, String message) {
+        String source = o.optString("source_id", "").trim();
+        if (!source.isEmpty()) return source;
+        String sequence = o.optString("sequence_id", "").trim();
+        if (!sequence.isEmpty()) return sequence;
+        String combined = (title == null ? "" : title) + "\n" + (message == null ? "" : message);
+        try {
+            Matcher m = Pattern.compile("(?:orden|order|venta)[^0-9]{0,20}(20[0-9]{10,})",
+                    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE).matcher(combined);
+            if (m.find()) return m.group(1);
+        } catch (Throwable ignored) {}
+        return o.optString("id", "").trim();
+    }
+
+    private void showRecoveredSaleNotification(String saleId, String title, String message) {
+        try {
+            Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? new Notification.Builder(this, SALES_CHANNEL)
+                    : new Notification.Builder(this);
+            b.setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(title == null || title.trim().isEmpty() ? "🛒 NUEVA VENTA — ML CENTRAL" : title)
+                    .setContentText(firstLine(message))
+                    .setStyle(new Notification.BigTextStyle().bigText(message == null ? "Venta nueva" : message))
+                    .setContentIntent(openAppIntent(saleId.hashCode()))
+                    .setAutoCancel(true)
+                    .setWhen(System.currentTimeMillis())
+                    .setShowWhen(true)
+                    .setCategory(Notification.CATEGORY_EVENT)
+                    .setVisibility(Notification.VISIBILITY_PUBLIC)
+                    .setNumber(SaleStore.unread(this));
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                b.setPriority(Notification.PRIORITY_MAX).setDefaults(Notification.DEFAULT_ALL);
+            }
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
+                    .notify(1000 + Math.abs(saleId.hashCode() % 900000), b.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private PendingIntent openAppIntent(int request) {
+        Intent i = new Intent(this, MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getActivity(this, request, i, flags);
+    }
+
+    private String firstLine(String s) {
+        if (s == null || s.trim().isEmpty()) return "Venta nueva";
+        int n = s.indexOf('\n');
+        return n > 0 ? s.substring(0, n) : s;
     }
 
     private void installCrashCapture() {
@@ -92,7 +245,7 @@ public class SaleListenerService extends FirebaseListenerService {
             pw.flush();
 
             StringBuilder out = new StringBuilder();
-            out.append("ML Central servicio v1.35\n");
+            out.append("ML Central servicio v1.44\n");
             out.append("fecha: ")
                     .append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss.SSS", Locale.getDefault()).format(new Date()))
                     .append('\n');
