@@ -25,21 +25,30 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Complemento liviano de v1.42. No toca la conexión Firebase del servicio.
- * Observa el tablero ya sincronizado para registrar transiciones reales a ENTREGADA,
- * refuerza el aviso visual y agrega la tarjeta ENTREGADAS HOY en Inicio.
+ * Complemento liviano de entregas.
+ *
+ * v1.43: los broadcasts de la app son muy frecuentes durante la sincronización
+ * por chunks y durante los reintentos de Firebase. Ya no recorremos todo el
+ * tablero en cada broadcast. Solo reconciliamos entregas cuando LAST_SYNC cambia,
+ * es decir, cuando Windows terminó una foto nueva de Estados o confirmó un cambio.
  */
 public class DeliveryApp extends Application implements Application.ActivityLifecycleCallbacks {
     private static final String CHANNEL = "ml_delivery_visual_v142";
     private static final String CARD_TAG = "mlc_delivered_today_card_v142";
     private static final String VALUE_TAG = "mlc_delivered_today_value_v142";
+    private static final long DEBOUNCE_MS = 900L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private WeakReference<MainActivity> currentMain = new WeakReference<>(null);
+    private volatile boolean reconcileRunning = false;
+    private volatile boolean reconcileAgain = false;
+    private volatile long lastReconciledStateAt = -1L;
+
+    private final Runnable reconcileDebounced = this::reconcileAsync;
 
     private final BroadcastReceiver refreshReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            reconcileAsync();
+            scheduleReconcile();
         }
     };
 
@@ -52,19 +61,65 @@ public class DeliveryApp extends Application implements Application.ActivityLife
         else registerReceiver(refreshReceiver, filter);
     }
 
+    private void scheduleReconcile() {
+        main.removeCallbacks(reconcileDebounced);
+        main.postDelayed(reconcileDebounced, DEBOUNCE_MS);
+    }
+
     private void reconcileAsync() {
+        final long stateAt;
+        try {
+            stateAt = StateStore.lastSyncAt(this);
+        } catch (Exception ignored) {
+            refreshCardOnly();
+            return;
+        }
+
+        // Durante BEGIN/CHUNK/reintentos LAST_SYNC no cambia. Solo refrescamos
+        // la tarjeta visual y evitamos recorrer las 100+ ventas una y otra vez.
+        if (stateAt <= 0L || stateAt == lastReconciledStateAt) {
+            refreshCardOnly();
+            return;
+        }
+
+        synchronized (this) {
+            if (reconcileRunning) {
+                reconcileAgain = true;
+                return;
+            }
+            reconcileRunning = true;
+        }
+
         new Thread(() -> {
             List<DeliveryStore.Delivery> fresh = Collections.emptyList();
             try {
-                if (StateStore.total(this) > 0) fresh = DeliveryStore.reconcile(this);
-            } catch (Exception ignored) {}
+                fresh = DeliveryStore.reconcile(this);
+                lastReconciledStateAt = stateAt;
+            } catch (Exception ignored) {
+            }
+
             final List<DeliveryStore.Delivery> ready = fresh;
             main.post(() -> {
                 for (DeliveryStore.Delivery d : ready) showDeliveryNotification(d);
-                MainActivity a = currentMain.get();
-                if (a != null && !a.isFinishing()) installOrRefreshCard(a);
+                refreshCardOnly();
             });
+
+            boolean again;
+            synchronized (DeliveryApp.this) {
+                reconcileRunning = false;
+                again = reconcileAgain;
+                reconcileAgain = false;
+            }
+            if (again) main.postDelayed(reconcileDebounced, DEBOUNCE_MS);
         }, "MLC-Delivery-Reconcile").start();
+    }
+
+    private void refreshCardOnly() {
+        MainActivity a = currentMain.get();
+        if (a != null && !a.isFinishing()) {
+            if (Looper.myLooper() == Looper.getMainLooper()) installOrRefreshCard(a);
+            else main.post(() -> installOrRefreshCard(a));
+        }
     }
 
     private void createDeliveryChannel() {
@@ -188,8 +243,8 @@ public class DeliveryApp extends Application implements Application.ActivityLife
         if (activity instanceof MainActivity) {
             MainActivity a = (MainActivity) activity;
             currentMain = new WeakReference<>(a);
-            if (StateStore.total(this) > 0) reconcileAsync();
-            else main.post(() -> installOrRefreshCard(a));
+            installOrRefreshCard(a);
+            scheduleReconcile();
         }
     }
 
