@@ -25,14 +25,14 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Complemento liviano de v1.41. No toca la conexión Firebase del servicio.
- * Observa el tablero ya sincronizado para registrar transiciones a ENTREGADA,
+ * Complemento liviano de v1.42. No toca la conexión Firebase del servicio.
+ * Observa el tablero ya sincronizado para registrar transiciones reales a ENTREGADA,
  * refuerza el aviso visual y agrega la tarjeta ENTREGADAS HOY en Inicio.
  */
 public class DeliveryApp extends Application implements Application.ActivityLifecycleCallbacks {
-    private static final String CHANNEL = "ml_delivery_visual_v141";
-    private static final String CARD_TAG = "mlc_delivered_today_card_v141";
-    private static final String VALUE_TAG = "mlc_delivered_today_value_v141";
+    private static final String CHANNEL = "ml_delivery_visual_v142";
+    private static final String CARD_TAG = "mlc_delivered_today_card_v142";
+    private static final String VALUE_TAG = "mlc_delivered_today_value_v142";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private WeakReference<MainActivity> currentMain = new WeakReference<>(null);
@@ -71,7 +71,7 @@ public class DeliveryApp extends Application implements Application.ActivityLife
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
         NotificationChannel ch = new NotificationChannel(CHANNEL, "Paquetes entregados", NotificationManager.IMPORTANCE_HIGH);
-        ch.setDescription("Aviso visible cuando una venta pasa a entregada.");
+        ch.setDescription("Aviso visible cuando una venta pasa realmente a entregada.");
         ch.enableVibration(true);
         ch.setVibrationPattern(new long[]{0, 220, 120, 220});
         ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
