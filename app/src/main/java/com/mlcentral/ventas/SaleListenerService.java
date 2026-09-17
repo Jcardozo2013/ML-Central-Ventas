@@ -35,10 +35,10 @@ import java.util.regex.Pattern;
  * v1.44 mantiene esa protección, pero recupera únicamente ventas recientes
  * que hayan entrado mientras Android/Xiaomi tenía el servicio detenido.
  *
- * v1.45 distingue una venta realmente notificada de una venta que apareció
- * solamente por restauración de Historial/Estados. Si una venta reciente quedó
- * guardada como vista sin haber sido confirmada por el usuario, vuelve a
- * marcarla como nueva y muestra su notificación en ese dispositivo.
+ * v1.45 recupera ventas recientes perdidas por Android/Xiaomi.
+ *
+ * v1.46 separa "vista/sincronizada" de "notificada". Un snapshot de Estados o
+ * Historial nunca puede consumir el sonido de una venta nueva, incluido STOCK LOCAL.
  */
 public class SaleListenerService extends FirebaseListenerService {
     public static final String CRASH_FILE = "mlcentral_service_crash_v135.txt";
@@ -55,6 +55,9 @@ public class SaleListenerService extends FirebaseListenerService {
     @Override public void onCreate() {
         installCrashCapture();
         writeEvent("onCreate: entrando");
+        // Al actualizar desde <=1.45, tomamos lo ya visto como baseline para no
+        // reproducir de golpe ventas antiguas. A partir de aquí se separan.
+        SaleStore.ensureNotificationBaseline(this);
 
         // IMPORTANTE: no iniciar desde un cursor viejo. El listener base, al no
         // encontrar cursor, consulta solamente el último elemento y se engancha
@@ -151,24 +154,21 @@ public class SaleListenerService extends FirebaseListenerService {
                                     String saleId = recoverySaleId(o, title, message);
                                     if (saleId.isEmpty()) continue;
 
-                                    // Si el usuario ya confirmó esta venta en este teléfono,
-                                    // no hay nada que recuperar.
-                                    if (SaleStore.isAcknowledged(SaleListenerService.this, saleId)) continue;
+                                    // v1.46: no usamos "seen" para decidir el sonido. Una venta
+                                    // puede haber llegado por Estados/Historial sin haber sonado.
+                                    if (SaleStore.isNotified(SaleListenerService.this, saleId)) continue;
 
-                                    boolean seen = SaleStore.isSeen(SaleListenerService.this, saleId);
-                                    boolean unread = historyIsUnread(saleId);
+                                    if (SaleStore.isAcknowledged(SaleListenerService.this, saleId)) {
+                                        SaleStore.markNotified(SaleListenerService.this, saleId);
+                                        continue;
+                                    }
 
-                                    // Venta recibida normalmente: ya está vista por el motor y
-                                    // todavía figura como nueva. No duplicamos el aviso.
-                                    if (seen && unread) continue;
-
-                                    // Caso v1.45: Historial/Estados pudieron guardar la venta
-                                    // como leída antes de que este celular oyera la notificación.
                                     SaleStore.markSeen(SaleListenerService.this, saleId);
                                     forceUnreadHistory(saleId,
                                             title == null || title.trim().isEmpty() ? "🛒 NUEVA VENTA — ML CENTRAL" : title,
                                             message, seconds);
                                     showRecoveredSaleNotification(saleId, title, message);
+                                    SaleStore.markNotified(SaleListenerService.this, saleId);
                                     recovered++;
                                 } catch (Throwable ignored) {}
                             }
@@ -327,7 +327,7 @@ public class SaleListenerService extends FirebaseListenerService {
             pw.flush();
 
             StringBuilder out = new StringBuilder();
-            out.append("ML Central servicio v1.45\n");
+            out.append("ML Central servicio v1.46\n");
             out.append("fecha: ")
                     .append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss.SSS", Locale.getDefault()).format(new Date()))
                     .append('\n');
