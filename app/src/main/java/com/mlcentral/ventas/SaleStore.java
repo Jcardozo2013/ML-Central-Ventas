@@ -18,6 +18,7 @@ import java.util.Set;
 
 public final class SaleStore {
     private static final int MAX_SEEN = 1000;
+    private static final int MAX_NOTIFIED = 1000;
     private static final int MAX_ACKED = 1000;
     private static final int MAX_HISTORY = 500;
 
@@ -54,6 +55,46 @@ public final class SaleStore {
         p.edit().putStringSet("seen_sales", set).apply();
     }
 
+    /**
+     * v1.46: una venta puede existir en Historial/Estados sin que este teléfono
+     * haya mostrado la notificación. Mantenemos ambos conceptos separados.
+     */
+    public static synchronized void ensureNotificationBaseline(Context c) {
+        SharedPreferences p = prefs(c);
+        if (p.getBoolean("notified_sales_v146_initialized", false)) return;
+        Set<String> baseline = new HashSet<>(p.getStringSet("seen_sales", new HashSet<>()));
+        p.edit()
+                .putStringSet("notified_sales", baseline)
+                .putBoolean("notified_sales_v146_initialized", true)
+                .commit();
+    }
+
+    public static synchronized boolean isNotified(Context c, String saleId) {
+        if (saleId == null || saleId.trim().isEmpty()) return false;
+        return prefs(c).getStringSet("notified_sales", new HashSet<>()).contains(saleId.trim());
+    }
+
+    public static synchronized void markNotified(Context c, String saleId) {
+        if (saleId == null || saleId.trim().isEmpty()) return;
+        SharedPreferences p = prefs(c);
+        Set<String> set = new HashSet<>(p.getStringSet("notified_sales", new HashSet<>()));
+        set.add(saleId.trim());
+        if (set.size() > MAX_NOTIFIED) {
+            Set<String> keep = new HashSet<>();
+            try {
+                JSONArray arr = new JSONArray(p.getString("history", "[]"));
+                for (int i = 0; i < arr.length() && keep.size() < 800; i++) {
+                    JSONObject o = arr.optJSONObject(i);
+                    String id = o != null ? o.optString("saleId", "").trim() : "";
+                    if (!id.isEmpty() && set.contains(id)) keep.add(id);
+                }
+            } catch (Exception ignored) {}
+            set = keep;
+            set.add(saleId.trim());
+        }
+        p.edit().putStringSet("notified_sales", set).apply();
+    }
+
     public static synchronized boolean isAcknowledged(Context c, String saleId) {
         if (saleId == null || saleId.trim().isEmpty()) return false;
         return prefs(c).getStringSet("acknowledged_sales", new HashSet<>()).contains(saleId);
@@ -85,8 +126,8 @@ public final class SaleStore {
             }
         }
 
-        boolean alreadyRead = existing != null ? existing.optBoolean("read", false) : isAcknowledged(c, wantedId);
-        if (isUpdate && existing == null) alreadyRead = true;
+        boolean alreadyRead = isAcknowledged(c, wantedId);
+        if (isUpdate) alreadyRead = existing != null ? existing.optBoolean("read", false) : true;
         long effectiveTime = existing != null ? existing.optLong("time", 0L) : 0L;
         if (effectiveTime <= 0) effectiveTime = unixTime > 0 ? unixTime : System.currentTimeMillis() / 1000L;
         String effectiveTitle;
