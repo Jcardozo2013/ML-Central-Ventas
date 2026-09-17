@@ -340,11 +340,15 @@ public class FirebaseListenerService extends Service {
         }
         String upper = title.toUpperCase(Locale.ROOT);
         if (!upper.contains("VENTA") && !upper.contains("ML CENTRAL")) return;
-        if (SaleStore.isSeen(this, saleId)) return;
+        // v1.46: que la venta ya exista en Estados/Historial NO significa que
+        // este teléfono ya la haya notificado. Esto es especialmente importante
+        // para STOCK LOCAL, que suele entrar al snapshot antes del evento vivo.
+        if (SaleStore.isNotified(this, saleId)) return;
         boolean alreadyConfirmed = SaleStore.isAcknowledged(this, saleId);
         SaleStore.markSeen(this, saleId);
         SaleStore.addHistory(this, saleId, title.isEmpty() ? "🛒 NUEVA VENTA — ML CENTRAL" : title, message, when);
         if (!alreadyConfirmed) showSaleNotification(saleId, title, message);
+        SaleStore.markNotified(this, saleId);
         broadcastRefresh();
     }
 
