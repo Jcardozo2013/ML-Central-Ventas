@@ -40,6 +40,8 @@ public final class DeliveryStore {
         public String orderId = "";
         public String product = "Producto";
         public String sale = "";
+        public String mlDeposit = "";
+        public String profit = "";
         public long time = 0L;
 
         public String detail() {
@@ -47,6 +49,8 @@ public final class DeliveryStore {
             sb.append(product == null || product.trim().isEmpty() ? "Producto" : product.trim());
             if (orderId != null && !orderId.trim().isEmpty()) sb.append("\nOrden: ").append(orderId.trim());
             if (sale != null && !sale.trim().isEmpty()) sb.append("\nVenta: ").append(sale.trim());
+            if (mlDeposit != null && !mlDeposit.trim().isEmpty()) sb.append("\nMercado Libre deposita: ").append(mlDeposit.trim());
+            if (profit != null && !profit.trim().isEmpty()) sb.append("\nGanancia: ").append(profit.trim());
             sb.append("\nEstado: ✅ Entregado");
             return sb.toString();
         }
@@ -75,6 +79,24 @@ public final class DeliveryStore {
         if (d.product.isEmpty()) d.product = "Producto";
         if (row != null && row.has("sale_amount") && !row.isNull("sale_amount")) {
             try { d.sale = SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)); }
+            catch (Exception ignored) {}
+        }
+        if (row != null && row.has("ml_net_deposit") && !row.isNull("ml_net_deposit")) {
+            try { d.mlDeposit = SaleStore.formatMoney(row.optDouble("ml_net_deposit", 0.0)); }
+            catch (Exception ignored) {}
+        } else if (row != null
+                && row.has("sale_amount") && !row.isNull("sale_amount")
+                && row.has("commission_total") && !row.isNull("commission_total")
+                && row.has("shipping_cost_total") && !row.isNull("shipping_cost_total")) {
+            try {
+                double net = row.optDouble("sale_amount", 0.0)
+                        - row.optDouble("commission_total", 0.0)
+                        - row.optDouble("shipping_cost_total", 0.0);
+                d.mlDeposit = SaleStore.formatMoney(net);
+            } catch (Exception ignored) {}
+        }
+        if (row != null && row.has("profit") && !row.isNull("profit")) {
+            try { d.profit = SaleStore.formatMoney(row.optDouble("profit", 0.0)); }
             catch (Exception ignored) {}
         }
         d.time = eventSeconds > 0L ? eventSeconds : System.currentTimeMillis() / 1000L;
@@ -126,6 +148,8 @@ public final class DeliveryStore {
             o.put("order_id", d.orderId == null ? "" : d.orderId);
             o.put("product", d.product == null ? "Producto" : d.product);
             o.put("sale", d.sale == null ? "" : d.sale);
+            o.put("ml_deposit", d.mlDeposit == null ? "" : d.mlDeposit);
+            o.put("profit", d.profit == null ? "" : d.profit);
             o.put("time", d.time);
         } catch (Exception ignored) {}
         return o;
@@ -140,6 +164,8 @@ public final class DeliveryStore {
         d.product = o.optString("product", "Producto").trim();
         if (d.product.isEmpty()) d.product = "Producto";
         d.sale = o.optString("sale", "").trim();
+        d.mlDeposit = o.optString("ml_deposit", "").trim();
+        d.profit = o.optString("profit", "").trim();
         d.time = o.optLong("time", 0L);
         return d;
     }
@@ -269,6 +295,15 @@ public final class DeliveryStore {
         SimpleDateFormat fmt = new SimpleDateFormat("HH:mm", Locale.getDefault());
         StringBuilder sb = new StringBuilder();
         for (Delivery d : list) {
+            // v1.47: una entrega registrada antes de recibir el snapshot financiero
+            // se completa al abrir el detalle usando el estado actual de Windows.
+            JSONObject state = findStateRow(c, d.id);
+            if (state != null) {
+                Delivery enriched = fromRow(state, d.time);
+                if (enriched.id == null || enriched.id.trim().isEmpty()) enriched.id = d.id;
+                d = enriched;
+            }
+
             if (sb.length() > 0) sb.append("\n\n────────────────────────\n\n");
             sb.append(d.time > 0L ? fmt.format(new Date(d.time * 1000L)) : "").append("\n");
             sb.append(d.detail());
