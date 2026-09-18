@@ -42,6 +42,7 @@ public final class DeliveryStore {
         public String sale = "";
         public String mlDeposit = "";
         public String profit = "";
+        public String origin = "";
         public long time = 0L;
 
         public String detail() {
@@ -51,6 +52,10 @@ public final class DeliveryStore {
             if (sale != null && !sale.trim().isEmpty()) sb.append("\nVenta: ").append(sale.trim());
             if (mlDeposit != null && !mlDeposit.trim().isEmpty()) sb.append("\nMercado Libre deposita: ").append(mlDeposit.trim());
             if (profit != null && !profit.trim().isEmpty()) sb.append("\nGanancia: ").append(profit.trim());
+            if (origin != null && !origin.trim().isEmpty()) {
+                String o = origin.trim().toUpperCase(Locale.ROOT);
+                sb.append("\nTipo: ").append("STOCK LOCAL".equals(o) ? "📦 STOCK LOCAL" : "🚚 POR ENCARGO BR");
+            }
             sb.append("\nEstado: ✅ Entregado");
             return sb.toString();
         }
@@ -99,6 +104,7 @@ public final class DeliveryStore {
             try { d.profit = SaleStore.formatMoney(row.optDouble("profit", 0.0)); }
             catch (Exception ignored) {}
         }
+        if (row != null) d.origin = row.optString("sale_origin", "").trim();
         d.time = eventSeconds > 0L ? eventSeconds : System.currentTimeMillis() / 1000L;
         return d;
     }
@@ -150,6 +156,7 @@ public final class DeliveryStore {
             o.put("sale", d.sale == null ? "" : d.sale);
             o.put("ml_deposit", d.mlDeposit == null ? "" : d.mlDeposit);
             o.put("profit", d.profit == null ? "" : d.profit);
+            o.put("origin", d.origin == null ? "" : d.origin);
             o.put("time", d.time);
         } catch (Exception ignored) {}
         return o;
@@ -166,6 +173,7 @@ public final class DeliveryStore {
         d.sale = o.optString("sale", "").trim();
         d.mlDeposit = o.optString("ml_deposit", "").trim();
         d.profit = o.optString("profit", "").trim();
+        d.origin = o.optString("origin", "").trim();
         d.time = o.optLong("time", 0L);
         return d;
     }
