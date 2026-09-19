@@ -66,10 +66,33 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         FirebaseConfig.ensureInitialized(this);
+        migrateFirebaseProjectV149();
         buildUi();
         requestNotificationsIfNeeded();
         ensureFirebaseLogin();
         refresh();
+    }
+
+    private void migrateFirebaseProjectV149() {
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        if (p.getBoolean("firebase_project_v149_migrated", false)) return;
+
+        // La base cambió de proyecto. Conservamos historial, ventas leídas,
+        // preferencias y configuración local, pero forzamos una sincronización
+        // limpia contra el Firebase nuevo.
+        p.edit()
+                .remove("firebase_main_cursor_v120")
+                .remove("firebase_rs_cursor_v120")
+                .remove("full_history_active_request_v3")
+                .remove("full_history_started_at_v3")
+                .remove("full_history_request_id_v3")
+                .putInt("full_history_expected_v3", 0)
+                .putInt("full_history_received_v3", 0)
+                .putBoolean("full_history_restore_done_v3", false)
+                .putLong("full_history_request_last_at_v3", 0L)
+                .putLong("state_request_last_at_v1", 0L)
+                .putBoolean("firebase_project_v149_migrated", true)
+                .apply();
     }
 
     private void ensureFirebaseLogin() {
