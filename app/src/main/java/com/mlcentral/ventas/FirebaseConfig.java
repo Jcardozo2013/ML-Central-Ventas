@@ -8,11 +8,11 @@ import com.google.firebase.FirebaseOptions;
 public final class FirebaseConfig {
     private FirebaseConfig() {}
 
-    public static final String PROJECT_ID = "ml-central-2a48f";
-    public static final String APP_ID = "1:383494225969:android:e76420239cdddf38dfd510";
-    public static final String API_KEY = "AIzaSyD_LIRTX3TxkBkn3xPPG0X86DdUvpqV5b0";
-    public static final String DATABASE_URL = "https://ml-central-2a48f-default-rtdb.firebaseio.com";
-    public static final String EXPECTED_UID = "q2LacnYyb0bIzRo8molBV9vYJop2";
+    public static final String PROJECT_ID = "alerta-ventas-juan";
+    public static final String APP_ID = "1:751488196206:android:6e1c93b33db9c58151907f";
+    public static final String API_KEY = "AIzaSyBYhRMzRNwkf-GNnNcEAGynImNjqh5xZpg";
+    public static final String DATABASE_URL = "https://alerta-ventas-juan-default-rtdb.firebaseio.com";
+    public static final String EXPECTED_UID = "wkhB4cn1YsNqorQezgqM2hW4nAK2";
 
     public static synchronized void ensureInitialized(Context context) {
         if (context == null) return;
