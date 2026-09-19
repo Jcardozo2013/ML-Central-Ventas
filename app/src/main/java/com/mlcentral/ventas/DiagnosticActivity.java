@@ -49,7 +49,7 @@ public class DiagnosticActivity extends Activity {
         scroll.addView(root);
 
         TextView title = new TextView(this);
-        title.setText("ML Central · Diagnóstico v1.49");
+        title.setText("ML Central · Diagnóstico v1.50");
         title.setTextSize(24);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(title, full(0, 14));
@@ -213,7 +213,7 @@ public class DiagnosticActivity extends Activity {
     private void copyReport() {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(ClipData.newPlainText("ML Central diagnóstico v1.49", lastReport));
+            cm.setPrimaryClip(ClipData.newPlainText("ML Central diagnóstico v1.50", lastReport));
             Toast.makeText(this, "Informe copiado", Toast.LENGTH_SHORT).show();
         } catch (Throwable e) {
             Toast.makeText(this, "No se pudo copiar", Toast.LENGTH_SHORT).show();
