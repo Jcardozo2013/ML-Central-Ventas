@@ -67,6 +67,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         FirebaseConfig.ensureInitialized(this);
         migrateFirebaseProjectV149();
+        migrateFirebaseAppV150();
         buildUi();
         requestNotificationsIfNeeded();
         ensureFirebaseLogin();
@@ -92,6 +93,19 @@ public class MainActivity extends Activity {
                 .putLong("full_history_request_last_at_v3", 0L)
                 .putLong("state_request_last_at_v1", 0L)
                 .putBoolean("firebase_project_v149_migrated", true)
+                .apply();
+    }
+
+    private void migrateFirebaseAppV150() {
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        if (p.getBoolean("firebase_app_v150_migrated", false)) return;
+        try { FirebaseAuth.getInstance().signOut(); } catch (Exception ignored) {}
+        p.edit()
+                .remove("firebase_main_cursor_v120")
+                .remove("firebase_rs_cursor_v120")
+                .putLong("state_request_last_at_v1", 0L)
+                .putLong("full_history_request_last_at_v3", 0L)
+                .putBoolean("firebase_app_v150_migrated", true)
                 .apply();
     }
 
