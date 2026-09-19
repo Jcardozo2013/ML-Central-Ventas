@@ -9,7 +9,7 @@ public final class FirebaseConfig {
     private FirebaseConfig() {}
 
     public static final String PROJECT_ID = "alerta-ventas-juan";
-    public static final String APP_ID = "1:751488196206:android:6e1c93b33db9c58151907f";
+    public static final String APP_ID = "1:751488196206:android:ae7e1e4a314c3b7251907f";
     public static final String API_KEY = "AIzaSyBYhRMzRNwkf-GNnNcEAGynImNjqh5xZpg";
     public static final String DATABASE_URL = "https://alerta-ventas-juan-default-rtdb.firebaseio.com";
     public static final String EXPECTED_UID = "wkhB4cn1YsNqorQezgqM2hW4nAK2";
