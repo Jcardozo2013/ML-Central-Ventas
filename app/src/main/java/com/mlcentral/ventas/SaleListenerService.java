@@ -327,7 +327,7 @@ public class SaleListenerService extends FirebaseListenerService {
             pw.flush();
 
             StringBuilder out = new StringBuilder();
-            out.append("ML Central servicio v1.46\n");
+            out.append("ML Central servicio v1.49\n");
             out.append("fecha: ")
                     .append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss.SSS", Locale.getDefault()).format(new Date()))
                     .append('\n');
