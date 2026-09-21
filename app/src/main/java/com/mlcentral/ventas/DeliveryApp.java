@@ -31,9 +31,12 @@ import java.util.List;
  * por chunks y durante los reintentos de Firebase. Ya no recorremos todo el
  * tablero en cada broadcast. Solo reconciliamos entregas cuando LAST_SYNC cambia,
  * es decir, cuando Windows terminó una foto nueva de Estados o confirmó un cambio.
+ *
+ * v1.51: los avisos detectados desde el snapshot usan el mismo canal de ENTREGAS
+ * que Configuración, para respetar siempre el sonido elegido por el usuario.
  */
 public class DeliveryApp extends Application implements Application.ActivityLifecycleCallbacks {
-    private static final String CHANNEL = "ml_delivery_visual_v142";
+    private static final String CHANNEL = FirebaseListenerService.DELIVERY_CHANNEL;
     private static final String CARD_TAG = "mlc_delivered_today_card_v142";
     private static final String VALUE_TAG = "mlc_delivered_today_value_v142";
     private static final long DEBOUNCE_MS = 900L;
