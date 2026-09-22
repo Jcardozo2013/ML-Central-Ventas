@@ -38,10 +38,12 @@ public class ServiceWatchdogReceiver extends BroadcastReceiver {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
             PendingIntent pi = PendingIntent.getBroadcast(app, 1440, i, flags);
             long when = SystemClock.elapsedRealtime() + Math.max(60_000L, delayMs);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am.canScheduleExactAlarms()) {
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, pi);
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, pi);
             } else {
-                am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, pi);
+                am.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, pi);
             }
         } catch (Throwable ignored) {}
     }
