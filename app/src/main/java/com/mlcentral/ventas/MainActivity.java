@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private TextView modeBadge;
     private TextView historyStatus;
     private TextView stateStatus;
+    private TextView backgroundStatus;
     private Button unread;
     private TextView todaySales;
     private TextView todayProfit;
@@ -230,6 +231,9 @@ public class MainActivity extends Activity {
         stateStatus = UiKit.text(this, "Estados PC: esperando sincronización…", 13, UiKit.MUTED, false);
         stateStatus.setPadding(0, UiKit.dp(this, 4), 0, 0);
         connectionCard.addView(stateStatus);
+        backgroundStatus = UiKit.text(this, "Segundo plano: comprobando…", 13, UiKit.MUTED, true);
+        backgroundStatus.setPadding(0, UiKit.dp(this, 5), 0, 0);
+        connectionCard.addView(backgroundStatus);
         root.addView(connectionCard, UiKit.fullWidth(this, 0, 12));
 
         unread = UiKit.button(this, "0 ventas nuevas");
@@ -419,6 +423,17 @@ public class MainActivity extends Activity {
         int pending = StateSync.pendingCount(this);
         if (pending > 0) stateText += " · " + pending + (pending == 1 ? " cambio pendiente" : " cambios pendientes");
         stateStatus.setText(stateText);
+
+        long heartbeat = p.getLong("background_heartbeat_v153", 0L);
+        long age = heartbeat <= 0L ? Long.MAX_VALUE : Math.max(0L, System.currentTimeMillis() - heartbeat);
+        if (age < 45000L) {
+            backgroundStatus.setText("● Segundo plano ACTIVO · pulso hace " + Math.max(0L, age / 1000L) + " s");
+            backgroundStatus.setTextColor(UiKit.GREEN);
+        } else {
+            String ago = heartbeat <= 0L ? "sin pulso" : "hace " + Math.max(1L, age / 60000L) + " min";
+            backgroundStatus.setText("● Segundo plano DETENIDO/ATRASADO · " + ago);
+            backgroundStatus.setTextColor(UiKit.ORANGE);
+        }
 
         todaySales.setText(String.valueOf(SaleStore.todaySaleCount(this)));
         todayProfit.setText(SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
