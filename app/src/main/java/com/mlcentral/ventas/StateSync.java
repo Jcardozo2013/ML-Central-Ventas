@@ -18,7 +18,7 @@ public final class StateSync {
     public static final String STATE_CHANGE_RESULT_TITLE = "MLC_STATE_CHANGE_RESULT_V1";
 
     private static final String PENDING_KEY = "pending_state_commands_v1";
-    private static final long REQUEST_MIN_MS = 120000L;
+    private static final long REQUEST_MIN_MS = 60000L;
     private static final int REQUEST_ATTEMPTS = 3;
     private static final long REQUEST_RETRY_MS = 1800L;
     private static volatile boolean requesting = false;
