@@ -6,7 +6,9 @@ import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
@@ -67,6 +69,14 @@ public class SettingsActivity extends Activity {
         TextView diagHint = UiKit.text(this, "Envía una prueba PING por el canal de Estados y espera la respuesta de Windows. El resultado se puede copiar.", 12, UiKit.MUTED, false);
         diagHint.setPadding(0, UiKit.dp(this, 7), 0, 0);
         connection.addView(diagHint);
+
+        Button background = UiKit.button(this, "Permitir trabajo en segundo plano");
+        background.setOnClickListener(v -> openBackgroundPowerSettings());
+        connection.addView(background, UiKit.fullWidth(this, 10, 0));
+        TextView bgHint = UiKit.text(this, "Recomendado para que Android/HyperOS no duerma ML Central y las ventas suenen aunque no tengas la APK abierta.", 12, UiKit.MUTED, false);
+        bgHint.setPadding(0, UiKit.dp(this, 7), 0, 0);
+        connection.addView(bgHint);
+
         root.addView(connection, UiKit.fullWidth(this, 7, 18));
 
         root.addView(sectionTitle("VENTAS"));
@@ -133,6 +143,25 @@ public class SettingsActivity extends Activity {
             } catch (Exception ignored) {}
             recreate();
         }, 700L);
+    }
+
+    private void openBackgroundPowerSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                    Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    i.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(i);
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {}
     }
 
     private void openChannelSettings(String channelId) {
