@@ -33,7 +33,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class FirebaseListenerService extends Service {
-    public static final String SERVICE_CHANNEL = "mlc_service";
+    public static final String SERVICE_CHANNEL = "mlc_service_live_v152";
     public static final String SALES_CHANNEL = "mlc_sales_urgent";
     public static final String DELIVERY_CHANNEL = "mlc_delivery_status_v1";
     public static final String HISTORY_SALE_TITLE = "MLC_HISTORY_SALE_V1";
@@ -181,11 +181,13 @@ public class FirebaseListenerService extends Service {
     }
 
     private void stateMaintenanceLoop() {
+        // v1.52: también en segundo plano pedimos una foto fresca cada minuto.
+        // StateSync evita solapamientos y aplica su propio límite mínimo.
         while (running) {
             try {
                 StateSync.flushPendingAsync(this);
-                if (StateStore.isStale(this, 5 * 60 * 1000L)) StateSync.requestSnapshotAsync(this, false);
-                Thread.sleep(120000L);
+                StateSync.requestSnapshotAsync(this, false);
+                Thread.sleep(60000L);
             } catch (InterruptedException ignored) {
             } catch (Exception ignored) {
                 try { Thread.sleep(15000L); } catch (InterruptedException ignored2) {}
@@ -364,8 +366,8 @@ public class FirebaseListenerService extends Service {
     private void createChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
-        NotificationChannel service = new NotificationChannel(SERVICE_CHANNEL, "Servicio ML Central", NotificationManager.IMPORTANCE_MIN);
-        service.setDescription("Mantiene la conexión para recibir ventas nuevas.");
+        NotificationChannel service = new NotificationChannel(SERVICE_CHANNEL, "Servicio ML Central", NotificationManager.IMPORTANCE_LOW);
+        service.setDescription("Mantiene ML Central activo en segundo plano para recibir ventas y estados en tiempo real.");
         service.setShowBadge(false);
         nm.createNotificationChannel(service);
 
