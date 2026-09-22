@@ -11,7 +11,7 @@ import android.os.SystemClock;
 /** Respaldo liviano: intenta volver a levantar el listener si Android/Xiaomi lo mata. */
 public class ServiceWatchdogReceiver extends BroadcastReceiver {
     public static final String ACTION = "com.mlcentral.ventas.KEEP_LISTENER_ALIVE";
-    private static final long DEFAULT_DELAY_MS = 10 * 60 * 1000L;
+    private static final long DEFAULT_DELAY_MS = 2 * 60 * 1000L;
 
     @Override public void onReceive(Context context, Intent intent) {
         startListener(context);
