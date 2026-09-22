@@ -55,6 +55,8 @@ public class FirebaseListenerService extends Service {
     private ChildEventListener rsListener;
     private DatabaseReference connectedRef;
     private ValueEventListener connectedListener;
+    private DatabaseReference durableStateRef;
+    private ValueEventListener durableStateListener;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -77,6 +79,7 @@ public class FirebaseListenerService extends Service {
             running = true;
             touchHeartbeat("listener_starting");
             watchConnection();
+            watchDurableState();
             attachChannel("channels/main", MAIN_CURSOR, true);
             attachChannel("channels/rs", RS_CURSOR, false);
             stateWorker = new Thread(this::stateMaintenanceLoop, "MLCentralFirebaseState");
@@ -157,6 +160,28 @@ public class FirebaseListenerService extends Service {
         connectedRef.addValueEventListener(connectedListener);
     }
 
+    @SuppressWarnings("unchecked")
+    private void watchDurableState() {
+        durableStateRef = FirebaseDatabase.getInstance().getReference("state/current");
+        durableStateListener = new ValueEventListener() {
+            @Override public void onDataChange(DataSnapshot snapshot) {
+                try {
+                    Object raw = snapshot.getValue();
+                    if (!(raw instanceof Map)) return;
+                    JSONObject root = new JSONObject((Map<String, Object>) raw);
+                    JSONObject sales = root.optJSONObject("sales");
+                    if (sales == null) return;
+                    StateStore.applyDurableSnapshot(FirebaseListenerService.this, sales, root.optInt("total", sales.length()));
+                    broadcastRefresh();
+                } catch (Throwable ignored) {}
+            }
+            @Override public void onCancelled(DatabaseError error) {
+                // El stream principal sigue funcionando aunque falle la copia durable.
+            }
+        };
+        durableStateRef.addValueEventListener(durableStateListener);
+    }
+
     private void attachChannel(String path, String cursorKey, boolean main) {
         DatabaseReference ref = FirebaseDatabase.getInstance().getReference(path);
         String cursor = prefs().getString(cursorKey, "");
@@ -233,16 +258,18 @@ public class FirebaseListenerService extends Service {
     }
 
     private void stateMaintenanceLoop() {
-        // v1.52: también en segundo plano pedimos una foto fresca cada minuto.
-        // StateSync evita solapamientos y aplica su propio límite mínimo.
+        // v1.54: los cambios pendientes se reintentan rápido, pero el tablero
+        // completo sólo se solicita como recuperación si quedó realmente viejo.
         while (running) {
             try {
                 StateSync.flushPendingAsync(this);
-                StateSync.requestSnapshotAsync(this, false);
-                Thread.sleep(60000L);
+                if (StateStore.isStale(this, 5 * 60 * 1000L)) {
+                    StateSync.requestSnapshotAsync(this, false);
+                }
+                Thread.sleep(10000L);
             } catch (InterruptedException ignored) {
             } catch (Exception ignored) {
-                try { Thread.sleep(15000L); } catch (InterruptedException ignored2) {}
+                try { Thread.sleep(5000L); } catch (InterruptedException ignored2) {}
             }
         }
     }
@@ -526,6 +553,7 @@ public class FirebaseListenerService extends Service {
         try { if (mainQuery != null && mainListener != null) mainQuery.removeEventListener(mainListener); } catch (Exception ignored) {}
         try { if (rsQuery != null && rsListener != null) rsQuery.removeEventListener(rsListener); } catch (Exception ignored) {}
         try { if (connectedRef != null && connectedListener != null) connectedRef.removeEventListener(connectedListener); } catch (Exception ignored) {}
+        try { if (durableStateRef != null && durableStateListener != null) durableStateRef.removeEventListener(durableStateListener); } catch (Exception ignored) {}
         super.onDestroy();
     }
 
