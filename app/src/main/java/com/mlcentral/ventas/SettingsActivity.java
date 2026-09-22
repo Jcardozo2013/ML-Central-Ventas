@@ -1,8 +1,10 @@
 package com.mlcentral.ventas;
 
 import android.app.Activity;
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -70,10 +72,23 @@ public class SettingsActivity extends Activity {
         diagHint.setPadding(0, UiKit.dp(this, 7), 0, 0);
         connection.addView(diagHint);
 
-        Button background = UiKit.button(this, "Permitir trabajo en segundo plano");
+        TextView bgStatus = UiKit.text(this, backgroundStatusText(), 13, UiKit.TEXT, true);
+        bgStatus.setPadding(0, UiKit.dp(this, 10), 0, 0);
+        connection.addView(bgStatus);
+
+        Button background = UiKit.button(this, "1. Permitir batería sin restricciones");
         background.setOnClickListener(v -> openBackgroundPowerSettings());
         connection.addView(background, UiKit.fullWidth(this, 10, 0));
-        TextView bgHint = UiKit.text(this, "Recomendado para que Android/HyperOS no duerma ML Central y las ventas suenen aunque no tengas la APK abierta.", 12, UiKit.MUTED, false);
+
+        Button autostart = UiKit.button(this, "2. Abrir Inicio automático / Autostart");
+        autostart.setOnClickListener(v -> openAutostartSettings());
+        connection.addView(autostart, UiKit.fullWidth(this, 8, 0));
+
+        Button exactAlarm = UiKit.button(this, "3. Permitir reinicio de respaldo");
+        exactAlarm.setOnClickListener(v -> openExactAlarmSettings());
+        connection.addView(exactAlarm, UiKit.fullWidth(this, 8, 0));
+
+        TextView bgHint = UiKit.text(this, "Para Xiaomi/Redmi/POCO/HyperOS dejá ML Central en Sin restricciones y activá Inicio automático. El tercer permiso permite que el watchdog la vuelva a levantar si Android la mata.", 12, UiKit.MUTED, false);
         bgHint.setPadding(0, UiKit.dp(this, 7), 0, 0);
         connection.addView(bgHint);
 
@@ -145,6 +160,28 @@ public class SettingsActivity extends Activity {
         }, 700L);
     }
 
+    private String backgroundStatusText() {
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        long hb = p.getLong("background_heartbeat_v153", 0L);
+        long age = hb <= 0L ? Long.MAX_VALUE : Math.max(0L, System.currentTimeMillis() - hb);
+        String pulse;
+        if (age < 45000L) pulse = "ACTIVO · último pulso hace " + Math.max(0L, age / 1000L) + " s";
+        else if (hb <= 0L) pulse = "SIN PULSO";
+        else pulse = "DETENIDO/ATRASADO · último pulso hace " + Math.max(1L, age / 60000L) + " min";
+
+        boolean unrestricted = false;
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) unrestricted = true;
+            else {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                unrestricted = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+            }
+        } catch (Exception ignored) {}
+
+        return "Servicio segundo plano: " + pulse + "\nBatería: "
+                + (unrestricted ? "SIN RESTRICCIONES" : "Android todavía puede dormir la app");
+    }
+
     private void openBackgroundPowerSettings() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -162,6 +199,45 @@ public class SettingsActivity extends Activity {
             i.setData(Uri.parse("package:" + getPackageName()));
             startActivity(i);
         } catch (Exception ignored) {}
+    }
+
+    private void openAutostartSettings() {
+        String[][] targets = new String[][]{
+                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                {"com.miui.securitycenter", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"},
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.oplus.safecenter", "com.oplus.safecenter.startupapp.StartupAppListActivity"},
+                {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"}
+        };
+        for (String[] target : targets) {
+            try {
+                Intent i = new Intent();
+                i.setComponent(new ComponentName(target[0], target[1]));
+                startActivity(i);
+                return;
+            } catch (Exception ignored) {}
+        }
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {}
+    }
+
+    private void openExactAlarmSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+                if (am != null && !am.canScheduleExactAlarms()) {
+                    Intent i = new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM);
+                    i.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(i);
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+        reconnect();
     }
 
     private void openChannelSettings(String channelId) {
