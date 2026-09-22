@@ -12,6 +12,7 @@ import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -33,7 +34,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class FirebaseListenerService extends Service {
-    public static final String SERVICE_CHANNEL = "mlc_service_live_v152";
+    public static final String SERVICE_CHANNEL = "mlc_service_live_v153";
     public static final String SALES_CHANNEL = "mlc_sales_urgent";
     public static final String DELIVERY_CHANNEL = "mlc_delivery_status_v1";
     public static final String HISTORY_SALE_TITLE = "MLC_HISTORY_SALE_V1";
@@ -46,6 +47,8 @@ public class FirebaseListenerService extends Service {
 
     private volatile boolean running = false;
     private Thread stateWorker;
+    private Thread heartbeatWorker;
+    private PowerManager.WakeLock wakeLock;
     private Query mainQuery;
     private Query rsQuery;
     private ChildEventListener mainListener;
@@ -56,6 +59,8 @@ public class FirebaseListenerService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         ensureForegroundNow();
+        acquireBackgroundWakeLock();
+        touchHeartbeat("starting");
         FirebaseConfig.ensureInitialized(this);
     }
 
@@ -70,12 +75,14 @@ public class FirebaseListenerService extends Service {
         }
         if (!running) {
             running = true;
+            touchHeartbeat("listener_starting");
             watchConnection();
             attachChannel("channels/main", MAIN_CURSOR, true);
             attachChannel("channels/rs", RS_CURSOR, false);
             stateWorker = new Thread(this::stateMaintenanceLoop, "MLCentralFirebaseState");
             stateWorker.setDaemon(true);
             stateWorker.start();
+            startHeartbeatLoop();
         }
         return START_STICKY;
     }
@@ -83,6 +90,50 @@ public class FirebaseListenerService extends Service {
     private void ensureForegroundNow() {
         createChannels();
         startForeground(7, serviceNotification("Conectando con Firebase…"));
+    }
+
+    private void acquireBackgroundWakeLock() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MLCentralVentas:LiveListener");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire();
+        } catch (Throwable ignored) {}
+    }
+
+    private void releaseBackgroundWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Throwable ignored) {}
+        wakeLock = null;
+    }
+
+    private void touchHeartbeat(String state) {
+        try {
+            prefs().edit()
+                    .putLong("background_heartbeat_v153", System.currentTimeMillis())
+                    .putString("background_state_v153", state == null ? "" : state)
+                    .apply();
+        } catch (Throwable ignored) {}
+    }
+
+    private void startHeartbeatLoop() {
+        if (heartbeatWorker != null && heartbeatWorker.isAlive()) return;
+        heartbeatWorker = new Thread(() -> {
+            while (running) {
+                try {
+                    touchHeartbeat(SaleStore.connected(FirebaseListenerService.this)
+                            ? "firebase_connected" : "listener_alive");
+                    Thread.sleep(20000L);
+                } catch (InterruptedException ignored) {
+                } catch (Throwable ignored) {
+                    try { Thread.sleep(5000L); } catch (InterruptedException ignored2) {}
+                }
+            }
+        }, "MLCentralHeartbeat");
+        heartbeatWorker.setDaemon(true);
+        heartbeatWorker.start();
     }
 
     private SharedPreferences prefs() {
@@ -95,8 +146,9 @@ public class FirebaseListenerService extends Service {
             @Override public void onDataChange(DataSnapshot snapshot) {
                 Boolean value = snapshot.getValue(Boolean.class);
                 boolean ok = Boolean.TRUE.equals(value);
+                touchHeartbeat(ok ? "firebase_connected" : "firebase_reconnecting");
                 setConnectionInfo(ok, ok ? "" : "Firebase sin conexión");
-                updateServiceNotification(ok ? "Conectado · Firebase" : "Reconectando con Firebase…");
+                updateServiceNotification(ok ? "Activo en segundo plano · Firebase" : "Reconectando con Firebase…");
             }
             @Override public void onCancelled(DatabaseError error) {
                 setConnectionInfo(false, "Firebase: " + error.getMessage());
@@ -366,9 +418,11 @@ public class FirebaseListenerService extends Service {
     private void createChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
-        NotificationChannel service = new NotificationChannel(SERVICE_CHANNEL, "Servicio ML Central", NotificationManager.IMPORTANCE_LOW);
-        service.setDescription("Mantiene ML Central activo en segundo plano para recibir ventas y estados en tiempo real.");
+        NotificationChannel service = new NotificationChannel(SERVICE_CHANNEL, "ML Central en segundo plano", NotificationManager.IMPORTANCE_LOW);
+        service.setDescription("Mantiene ML Central activo para recibir ventas aunque la pantalla de la app esté cerrada.");
         service.setShowBadge(false);
+        service.enableVibration(false);
+        service.setSound(null, null);
         nm.createNotificationChannel(service);
 
         NotificationChannel sales = new NotificationChannel(SALES_CHANNEL, "Ventas nuevas", NotificationManager.IMPORTANCE_HIGH);
@@ -401,13 +455,18 @@ public class FirebaseListenerService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, SERVICE_CHANNEL)
                 : new Notification.Builder(this);
-        return b.setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("ML Central Ventas activo")
+        b.setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("ML Central Ventas · SEGUNDO PLANO ACTIVO")
                 .setContentText(text)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .setContentIntent(openAppIntent(7))
-                .build();
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setContentIntent(openAppIntent(7));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
+        }
+        return b.build();
     }
 
     private void updateServiceNotification(String text) {
@@ -459,8 +518,11 @@ public class FirebaseListenerService extends Service {
 
     @Override public void onDestroy() {
         running = false;
+        touchHeartbeat("service_destroyed");
         SaleStore.setConnected(this, false);
         if (stateWorker != null) stateWorker.interrupt();
+        if (heartbeatWorker != null) heartbeatWorker.interrupt();
+        releaseBackgroundWakeLock();
         try { if (mainQuery != null && mainListener != null) mainQuery.removeEventListener(mainListener); } catch (Exception ignored) {}
         try { if (rsQuery != null && rsListener != null) rsQuery.removeEventListener(rsListener); } catch (Exception ignored) {}
         try { if (connectedRef != null && connectedListener != null) connectedRef.removeEventListener(connectedListener); } catch (Exception ignored) {}
