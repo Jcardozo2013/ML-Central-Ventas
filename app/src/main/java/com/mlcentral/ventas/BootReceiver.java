@@ -10,7 +10,9 @@ public class BootReceiver extends BroadcastReceiver {
         String action = intent == null ? "" : intent.getAction();
         boolean boot = Intent.ACTION_BOOT_COMPLETED.equals(action);
         boolean updated = Intent.ACTION_MY_PACKAGE_REPLACED.equals(action);
-        if (!boot && !updated) return;
+        boolean quickBoot = "android.intent.action.QUICKBOOT_POWERON".equals(action)
+                || "com.htc.intent.action.QUICKBOOT_POWERON".equals(action);
+        if (!boot && !updated && !quickBoot) return;
 
         Intent service = new Intent(context, SaleListenerService.class);
         try {
