@@ -44,13 +44,16 @@ public class SaleListenerService extends FirebaseListenerService {
     public static final String CRASH_FILE = "mlcentral_service_crash_v135.txt";
     public static final String EVENT_FILE = "mlcentral_service_event_v135.txt";
 
-    private static final long WATCHDOG_MS = 5 * 60 * 1000L;
+    private static final long WATCHDOG_MS = 2 * 60 * 1000L;
     private static final long RECOVERY_WINDOW_MS = 2 * 60 * 60 * 1000L;
+    private static final long RECOVERY_INTERVAL_MS = 45 * 1000L;
     private static final int RECOVERY_LIMIT = 50;
     private static final int MAX_RECOVERY_HISTORY = 5000;
 
     private Thread.UncaughtExceptionHandler previousHandler;
-    private volatile boolean recoveryStarted = false;
+    private volatile boolean recoveryLoopRunning = false;
+    private volatile boolean recoveryInFlight = false;
+    private Thread recoveryWorker;
 
     @Override public void onCreate() {
         installCrashCapture();
@@ -83,10 +86,7 @@ public class SaleListenerService extends FirebaseListenerService {
         ServiceWatchdogReceiver.schedule(this, WATCHDOG_MS);
         try {
             int result = super.onStartCommand(intent, flags, startId);
-            if (!recoveryStarted) {
-                recoveryStarted = true;
-                recoverRecentMissedSales();
-            }
+            startRecoveryLoop();
             writeEvent("onStartCommand: OK result=" + result);
             return result;
         } catch (Throwable error) {
@@ -106,12 +106,33 @@ public class SaleListenerService extends FirebaseListenerService {
 
     @Override public void onDestroy() {
         writeEvent("onDestroy");
+        recoveryLoopRunning = false;
+        try { if (recoveryWorker != null) recoveryWorker.interrupt(); } catch (Throwable ignored) {}
         ServiceWatchdogReceiver.schedule(this, 60_000L);
         try {
             super.onDestroy();
         } catch (Throwable error) {
             writeCrash("onDestroy", error);
         }
+    }
+
+    private synchronized void startRecoveryLoop() {
+        if (recoveryLoopRunning) return;
+        recoveryLoopRunning = true;
+        recoveryWorker = new Thread(() -> {
+            while (recoveryLoopRunning) {
+                try {
+                    recoverRecentMissedSales();
+                    Thread.sleep(RECOVERY_INTERVAL_MS);
+                } catch (InterruptedException ignored) {
+                } catch (Throwable error) {
+                    writeEvent("recovery loop error: " + error.getClass().getSimpleName());
+                    try { Thread.sleep(15000L); } catch (InterruptedException ignored2) {}
+                }
+            }
+        }, "MLCentralSaleRecovery");
+        recoveryWorker.setDaemon(true);
+        recoveryWorker.start();
     }
 
     /**
@@ -121,6 +142,10 @@ public class SaleListenerService extends FirebaseListenerService {
      */
     @SuppressWarnings("unchecked")
     private void recoverRecentMissedSales() {
+        synchronized (this) {
+            if (recoveryInFlight) return;
+            recoveryInFlight = true;
+        }
         try {
             FirebaseDatabase.getInstance()
                     .getReference("channels/main")
@@ -178,13 +203,16 @@ public class SaleListenerService extends FirebaseListenerService {
                                     sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
                                 } catch (Throwable ignored) {}
                             }
+                            recoveryInFlight = false;
                         }
 
                         @Override public void onCancelled(DatabaseError error) {
+                            recoveryInFlight = false;
                             writeEvent("recuperación reciente cancelada: " + (error == null ? "?" : error.getMessage()));
                         }
                     });
         } catch (Throwable error) {
+            recoveryInFlight = false;
             writeEvent("recuperación reciente error: " + error.getClass().getSimpleName());
         }
     }
