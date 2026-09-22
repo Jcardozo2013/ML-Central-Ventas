@@ -129,8 +129,42 @@ public final class StateStore {
         SharedPreferences p = prefs(c);
         JSONObject all = object(p.getString(FINAL_KEY, "{}"));
         try { all.put(oid, state); } catch (Exception ignored) {}
+
+        // v1.54: si justo estaba entrando un snapshot completo, actualizar también
+        // esa copia en curso. Así el final del snapshot no puede pisar un cambio
+        // confirmado segundos antes desde otro celular/Windows.
+        JSONObject active = object(p.getString(ACTIVE_KEY, "{}"));
+        JSONObject activeSales = active.optJSONObject("sales");
+        boolean activeChanged = false;
+        if (activeSales != null && !active.optString("batch_id", "").trim().isEmpty()) {
+            try {
+                activeSales.put(oid, state);
+                active.put("sales", activeSales);
+                activeChanged = true;
+            } catch (Exception ignored) {}
+        }
+
         long now = System.currentTimeMillis();
-        p.edit().putString(FINAL_KEY, all.toString()).putLong(LAST_SYNC_KEY, now).apply();
+        SharedPreferences.Editor e = p.edit()
+                .putString(FINAL_KEY, all.toString())
+                .putLong(LAST_SYNC_KEY, now);
+        if (activeChanged) e.putString(ACTIVE_KEY, active.toString());
+        e.apply();
+    }
+
+    public static synchronized void applyDurableSnapshot(Context c, JSONObject sales, int total) {
+        if (sales == null) return;
+        SharedPreferences p = prefs(c);
+        long now = System.currentTimeMillis();
+        int count = sales.length();
+        p.edit()
+                .putString(FINAL_KEY, sales.toString())
+                .putString(ACTIVE_KEY, "")
+                .putLong(LAST_SYNC_KEY, now)
+                .putString(LAST_STATUS_KEY, "Estados sincronizados en vivo: " + count)
+                .putLong(LAST_STATUS_AT_KEY, now)
+                .apply();
+        HistoryRestore.backfillFromStateObject(c, sales);
     }
 
     public static synchronized List<JSONObject> allSales(Context c) {
