@@ -62,19 +62,10 @@ public class SaleListenerService extends FirebaseListenerService {
         // reproducir de golpe ventas antiguas. A partir de aquí se separan.
         SaleStore.ensureNotificationBaseline(this);
 
-        // IMPORTANTE: no iniciar desde un cursor viejo. El listener base, al no
-        // encontrar cursor, consulta solamente el último elemento y se engancha
-        // desde allí. Luego pide historial y estados por sus canales dedicados.
-        try {
-            SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
-            p.edit()
-                    .remove("firebase_main_cursor_v120")
-                    .remove("firebase_rs_cursor_v120")
-                    .commit();
-            writeEvent("cursores antiguos descartados");
-        } catch (Throwable error) {
-            writeEvent("no se pudieron limpiar cursores: " + error.getClass().getSimpleName());
-        }
+        // v1.53: NO borrar los cursores de Firebase al recrear el servicio.
+        // Si Android/HyperOS mata el proceso, conservarlos permite continuar
+        // exactamente desde el último evento procesado y no saltar una venta.
+        writeEvent("cursores Firebase preservados");
 
         super.onCreate();
         ServiceWatchdogReceiver.schedule(this, WATCHDOG_MS);
@@ -92,9 +83,10 @@ public class SaleListenerService extends FirebaseListenerService {
         } catch (Throwable error) {
             writeCrash("onStartCommand", error);
             writeEvent("onStartCommand: ERROR capturado " + error.getClass().getName());
-            try { stopSelf(startId); } catch (Throwable ignored) {}
+            // v1.53: un error temporal no debe matar definitivamente el listener.
+            // Dejamos que Android lo recree y además armamos el watchdog.
             ServiceWatchdogReceiver.schedule(this, 60_000L);
-            return START_NOT_STICKY;
+            return START_STICKY;
         }
     }
 
@@ -355,7 +347,7 @@ public class SaleListenerService extends FirebaseListenerService {
             pw.flush();
 
             StringBuilder out = new StringBuilder();
-            out.append("ML Central servicio v1.50\n");
+            out.append("ML Central servicio v1.53\n");
             out.append("fecha: ")
                     .append(new SimpleDateFormat("dd/MM/yyyy HH:mm:ss.SSS", Locale.getDefault()).format(new Date()))
                     .append('\n');
