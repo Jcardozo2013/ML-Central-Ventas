@@ -113,7 +113,9 @@ public final class SyncDiagnostics {
                     if (!sent.ok) {
                         report.append("ERROR\nRESULTADO: ").append(sent.detail).append("\n");
                     } else {
-                        report.append("enviado\nEsperando PONG de Windows...\n");
+                        report.append("enviado\n");
+                        report.append("Escritura usada: ").append(sent.detail).append("\n");
+                        report.append("Esperando PONG de Windows...\n");
                         latch.await(15, TimeUnit.SECONDS);
                         if (pong.get().trim().isEmpty()) {
                             report.append("RESULTADO: PING salió del celular, pero NO llegó PONG desde Windows en 15 s.\n");
