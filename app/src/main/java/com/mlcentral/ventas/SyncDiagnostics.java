@@ -58,6 +58,26 @@ public final class SyncDiagnostics {
         }
     }
 
+    private static String findPongRest(Activity activity, String pingId) {
+        try {
+            FirebaseTransport.JsonResult rr = FirebaseTransport.readJsonRest(activity, "channels/main", 120);
+            if (!rr.ok || rr.data == null) return "";
+            org.json.JSONArray names = rr.data.names();
+            if (names == null) return "";
+            for (int i = 0; i < names.length(); i++) {
+                JSONObject msg = rr.data.optJSONObject(names.optString(i, ""));
+                if (msg == null || !PONG_TITLE.equals(msg.optString("title", ""))) continue;
+                try {
+                    JSONObject body = new JSONObject(msg.optString("message", "{}"));
+                    if (pingId.equals(body.optString("ping_id", ""))) {
+                        return body.optString("windows_version", "Windows respondió") + " · recibido por REST";
+                    }
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+        return "";
+    }
+
     public static void run(Activity activity) {
         if (activity == null) return;
         final long started = System.currentTimeMillis();
@@ -116,7 +136,16 @@ public final class SyncDiagnostics {
                         report.append("enviado\n");
                         report.append("Escritura usada: ").append(sent.detail).append("\n");
                         report.append("Esperando PONG de Windows...\n");
-                        latch.await(15, TimeUnit.SECONDS);
+                        long deadline = System.currentTimeMillis() + 15000L;
+                        while (pong.get().trim().isEmpty() && System.currentTimeMillis() < deadline) {
+                            latch.await(1500, TimeUnit.MILLISECONDS);
+                            if (!pong.get().trim().isEmpty()) break;
+                            String restPong = findPongRest(activity, pingId);
+                            if (!restPong.trim().isEmpty()) {
+                                pong.set(restPong);
+                                break;
+                            }
+                        }
                         if (pong.get().trim().isEmpty()) {
                             report.append("RESULTADO: PING salió del celular, pero NO llegó PONG desde Windows en 15 s.\n");
                             report.append("Lectura: revisar la configuración Firebase de Windows.\n");
