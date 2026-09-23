@@ -404,6 +404,12 @@ public class MainActivity extends Activity {
             modeBadge.setText("FIREBASE");
             modeBadge.setTextColor(UiKit.GREEN);
             modeBadge.setBackground(UiKit.rounded(UiKit.GREEN_SOFT, 99, this));
+        } else if (c && "firebase-rest".equals(mode)) {
+            status.setText("● Conectado por respaldo · " + time);
+            status.setTextColor(UiKit.GREEN);
+            modeBadge.setText("RESPALDO");
+            modeBadge.setTextColor(UiKit.GREEN);
+            modeBadge.setBackground(UiKit.rounded(UiKit.GREEN_SOFT, 99, this));
         } else if (c) {
             status.setText("● Conectado · " + time);
             status.setTextColor(UiKit.GREEN);
