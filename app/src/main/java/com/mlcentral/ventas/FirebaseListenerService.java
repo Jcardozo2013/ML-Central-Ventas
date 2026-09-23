@@ -266,7 +266,7 @@ public class FirebaseListenerService extends Service {
                 if (StateStore.isStale(this, 5 * 60 * 1000L)) {
                     StateSync.requestSnapshotAsync(this, false);
                 }
-                Thread.sleep(10000L);
+                Thread.sleep(5000L);
             } catch (InterruptedException ignored) {
             } catch (Exception ignored) {
                 try { Thread.sleep(5000L); } catch (InterruptedException ignored2) {}
