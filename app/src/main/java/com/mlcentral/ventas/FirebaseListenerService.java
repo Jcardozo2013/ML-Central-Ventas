@@ -178,7 +178,9 @@ public class FirebaseListenerService extends Service {
 
     private void pollDurableStateRest() {
         FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "state/current", 0);
-        if (!result.ok || result.data == null || result.data.length() == 0) return;
+        if (!result.ok) return;
+        markRestFallbackHealthy();
+        if (result.data == null || result.data.length() == 0) return;
         JSONObject root = result.data;
         JSONObject sales = root.optJSONObject("sales");
         if (sales == null) return;
@@ -219,7 +221,9 @@ public class FirebaseListenerService extends Service {
         // 40 eventos recientes alcanza para recuperar ventas perdidas y reduce
         // mucho JSON/red/CPU frente a consultar 120 cada diez segundos.
         FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/main", 40);
-        if (!result.ok || result.data == null || result.data.length() == 0) return;
+        if (!result.ok) return;
+        markRestFallbackHealthy();
+        if (result.data == null || result.data.length() == 0) return;
 
         ArrayList<String> keys = new ArrayList<>();
         JSONArray names = result.data.names();
@@ -278,15 +282,54 @@ public class FirebaseListenerService extends Service {
             @Override public void onDataChange(DataSnapshot snapshot) {
                 Boolean value = snapshot.getValue(Boolean.class);
                 boolean ok = Boolean.TRUE.equals(value);
-                touchHeartbeat(ok ? "firebase_connected" : "firebase_reconnecting");
-                setConnectionInfo(ok, ok ? "" : "Firebase sin conexión");
-                updateServiceNotification(ok ? "Activo en segundo plano · Firebase" : "Reconectando con Firebase…");
+                prefs().edit().putBoolean("firebase_sdk_connected_v159", ok).apply();
+                if (ok) {
+                    touchHeartbeat("firebase_connected");
+                    setConnectionInfo(true, "", "firebase");
+                    updateServiceNotification("Activo en segundo plano · Firebase");
+                    return;
+                }
+
+                // v1.59: en ciertos modelos el socket Firebase sube y baja cada
+                // pocos segundos, pero la vía HTTPS sigue funcionando perfecto.
+                // No mostramos SIN ENLACE mientras el respaldo esté saludable.
+                if (restFallbackHealthy()) {
+                    touchHeartbeat("rest_fallback_connected");
+                    setConnectionInfo(true, "", "firebase-rest");
+                    updateServiceNotification("Activo en segundo plano · respaldo HTTPS");
+                } else {
+                    touchHeartbeat("firebase_reconnecting");
+                    setConnectionInfo(false, "Firebase sin conexión", "reconnecting");
+                    updateServiceNotification("Reconectando con Firebase…");
+                }
             }
             @Override public void onCancelled(DatabaseError error) {
-                setConnectionInfo(false, "Firebase: " + error.getMessage());
+                if (restFallbackHealthy()) {
+                    setConnectionInfo(true, "", "firebase-rest");
+                    updateServiceNotification("Activo en segundo plano · respaldo HTTPS");
+                } else {
+                    setConnectionInfo(false, "Firebase: " + error.getMessage(), "reconnecting");
+                }
             }
         };
         connectedRef.addValueEventListener(connectedListener);
+    }
+
+    private boolean restFallbackHealthy() {
+        long at = prefs().getLong("firebase_rest_last_ok_at_v159", 0L);
+        return at > 0L && System.currentTimeMillis() - at < 35000L;
+    }
+
+    private void markRestFallbackHealthy() {
+        SharedPreferences p = prefs();
+        boolean sdkConnected = p.getBoolean("firebase_sdk_connected_v159", false);
+        String previousMode = p.getString("connection_mode", "");
+        p.edit().putLong("firebase_rest_last_ok_at_v159", System.currentTimeMillis()).apply();
+        if (!sdkConnected && !"firebase-rest".equals(previousMode)) {
+            touchHeartbeat("rest_fallback_connected");
+            setConnectionInfo(true, "", "firebase-rest");
+            updateServiceNotification("Activo en segundo plano · respaldo HTTPS");
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -404,12 +447,28 @@ public class FirebaseListenerService extends Service {
     }
 
     private void setConnectionInfo(boolean connected, String error) {
+        setConnectionInfo(connected, error, connected ? "firebase" : "reconnecting");
+    }
+
+    private void setConnectionInfo(boolean connected, String error, String mode) {
+        SharedPreferences p = prefs();
+        boolean oldConnected = SaleStore.connected(this);
+        String oldMode = p.getString("connection_mode", "");
+        String oldError = p.getString("connection_last_error", "");
+
         SaleStore.setConnected(this, connected);
-        prefs().edit()
-                .putString("connection_mode", connected ? "firebase" : "reconnecting")
-                .putString("connection_last_error", error == null ? "" : error)
+        String nextMode = mode == null || mode.trim().isEmpty()
+                ? (connected ? "firebase" : "reconnecting") : mode.trim();
+        String nextError = error == null ? "" : error;
+        p.edit()
+                .putString("connection_mode", nextMode)
+                .putString("connection_last_error", nextError)
                 .apply();
-        broadcastRefresh();
+
+        // Evita repintar toda la pantalla por cada pulso si visualmente nada cambió.
+        if (oldConnected != connected || !nextMode.equals(oldMode) || !nextError.equals(oldError)) {
+            broadcastRefresh();
+        }
     }
 
     private void handleReadSync(JSONObject o) {
