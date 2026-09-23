@@ -97,7 +97,7 @@ public final class FirebaseTransport {
             if (latch.await(5, TimeUnit.SECONDS)) {
                 if (ok.get()) return new Result(true, detail.get(), key);
                 // Error explícito del SDK: intentamos la misma escritura por HTTPS.
-                Result rest = restPut(user, path, key, value, false);
+                Result rest = restPost(user, path, key, value, false);
                 if (rest.ok) return rest;
                 return new Result(false, detail.get() + " · " + rest.detail, key);
             }
@@ -106,7 +106,7 @@ public final class FirebaseTransport {
             // aparentemente conectado pero una escritura nunca recibe ACK. En ese
             // caso usamos la API REST autenticada al MISMO child key. Si el SDK
             // revive después, solo sobrescribe el mismo mensaje y no lo duplica.
-            Result rest = restPut(user, path, key, value, false);
+            Result rest = restPost(user, path, key, value, false);
             if (rest.ok) return rest;
             return new Result(false, "Firebase SDK timeout · " + rest.detail, key);
         } catch (Exception e) {
@@ -114,7 +114,7 @@ public final class FirebaseTransport {
         }
     }
 
-    private static Result restPut(FirebaseUser user, String path, String key, Map<String, Object> value, boolean forceRefresh) {
+    private static Result restPost(FirebaseUser user, String path, String key, Map<String, Object> value, boolean forceRefresh) {
         String token = getIdToken(user, forceRefresh);
         if (token.isEmpty()) return new Result(false, "REST: no se pudo obtener token Firebase", key);
 
@@ -122,10 +122,13 @@ public final class FirebaseTransport {
         try {
             String base = FirebaseConfig.DATABASE_URL;
             if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
-            String url = base + "/" + path + "/" + key + ".json?auth="
+            // v1.56: el fallback usa POST al canal para que Firebase genere el
+            // push-id en el servidor. Con varios celulares evitamos que un ID
+            // generado por un teléfono quede detrás del cursor de Windows.
+            String url = base + "/" + path + ".json?auth="
                     + URLEncoder.encode(token, StandardCharsets.UTF_8.name());
             conn = (HttpURLConnection) new java.net.URL(url).openConnection();
-            conn.setRequestMethod("PUT");
+            conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(7000);
             conn.setReadTimeout(7000);
@@ -139,11 +142,22 @@ public final class FirebaseTransport {
             }
             int code = conn.getResponseCode();
             if (code >= 200 && code < 300) {
-                return new Result(true, "Firebase REST fallback OK", key);
+                String serverKey = key;
+                try {
+                    java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                    StringBuilder raw = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) raw.append(line);
+                    JSONObject response = new JSONObject(raw.toString());
+                    String generated = response.optString("name", "").trim();
+                    if (!generated.isEmpty()) serverKey = generated;
+                } catch (Exception ignored) {}
+                return new Result(true, "Firebase REST fallback OK · ID servidor", serverKey);
             }
             if ((code == 401 || code == 403) && !forceRefresh) {
                 conn.disconnect();
-                return restPut(user, path, key, value, true);
+                return restPost(user, path, key, value, true);
             }
             return new Result(false, "REST HTTP " + code, key);
         } catch (Exception e) {
