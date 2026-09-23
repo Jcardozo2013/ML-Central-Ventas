@@ -9,6 +9,10 @@ import com.google.firebase.database.FirebaseDatabase;
 
 import org.json.JSONObject;
 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -58,9 +62,11 @@ public final class FirebaseTransport {
                 return new Result(false, "Firebase: usuario no autorizado", "");
             }
 
-            DatabaseReference child = FirebaseDatabase.getInstance()
-                    .getReference(pathForTopic(topic))
-                    .push();
+            String path = pathForTopic(topic);
+            FirebaseDatabase db = FirebaseDatabase.getInstance();
+            try { db.goOnline(); } catch (Exception ignored) {}
+
+            DatabaseReference child = db.getReference(path).push();
             String key = child.getKey();
             if (key == null || key.trim().isEmpty()) return new Result(false, "Firebase: no se pudo crear mensaje", "");
 
@@ -76,21 +82,94 @@ public final class FirebaseTransport {
 
             CountDownLatch latch = new CountDownLatch(1);
             AtomicBoolean ok = new AtomicBoolean(false);
-            AtomicReference<String> detail = new AtomicReference<>("Firebase: timeout");
+            AtomicReference<String> detail = new AtomicReference<>("Firebase SDK: timeout");
             child.setValue(value).addOnCompleteListener(task -> {
                 if (task.isSuccessful()) {
                     ok.set(true);
-                    detail.set("Firebase OK");
+                    detail.set("Firebase SDK OK");
                 } else {
                     Exception e = task.getException();
-                    detail.set("Firebase: " + (e == null ? "error" : String.valueOf(e.getMessage())));
+                    detail.set("Firebase SDK: " + (e == null ? "error" : String.valueOf(e.getMessage())));
                 }
                 latch.countDown();
             });
-            if (!latch.await(12, TimeUnit.SECONDS)) return new Result(false, "Firebase: timeout", key);
-            return new Result(ok.get(), detail.get(), key);
+
+            if (latch.await(5, TimeUnit.SECONDS)) {
+                if (ok.get()) return new Result(true, detail.get(), key);
+                // Error explícito del SDK: intentamos la misma escritura por HTTPS.
+                Result rest = restPut(user, path, key, value, false);
+                if (rest.ok) return rest;
+                return new Result(false, detail.get() + " · " + rest.detail, key);
+            }
+
+            // v1.55: algunos teléfonos quedan con el socket de Realtime Database
+            // aparentemente conectado pero una escritura nunca recibe ACK. En ese
+            // caso usamos la API REST autenticada al MISMO child key. Si el SDK
+            // revive después, solo sobrescribe el mismo mensaje y no lo duplica.
+            Result rest = restPut(user, path, key, value, false);
+            if (rest.ok) return rest;
+            return new Result(false, "Firebase SDK timeout · " + rest.detail, key);
         } catch (Exception e) {
             return new Result(false, "Firebase: " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), "");
+        }
+    }
+
+    private static Result restPut(FirebaseUser user, String path, String key, Map<String, Object> value, boolean forceRefresh) {
+        String token = getIdToken(user, forceRefresh);
+        if (token.isEmpty()) return new Result(false, "REST: no se pudo obtener token Firebase", key);
+
+        HttpURLConnection conn = null;
+        try {
+            String base = FirebaseConfig.DATABASE_URL;
+            if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+            String url = base + "/" + path + "/" + key + ".json?auth="
+                    + URLEncoder.encode(token, StandardCharsets.UTF_8.name());
+            conn = (HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setRequestMethod("PUT");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(7000);
+            conn.setReadTimeout(7000);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("Accept", "application/json");
+            byte[] body = new JSONObject(value).toString().getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(body.length);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body);
+                os.flush();
+            }
+            int code = conn.getResponseCode();
+            if (code >= 200 && code < 300) {
+                return new Result(true, "Firebase REST fallback OK", key);
+            }
+            if ((code == 401 || code == 403) && !forceRefresh) {
+                conn.disconnect();
+                return restPut(user, path, key, value, true);
+            }
+            return new Result(false, "REST HTTP " + code, key);
+        } catch (Exception e) {
+            return new Result(false, "REST " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), key);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String getIdToken(FirebaseUser user, boolean forceRefresh) {
+        if (user == null) return "";
+        try {
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<String> token = new AtomicReference<>("");
+            user.getIdToken(forceRefresh).addOnCompleteListener(task -> {
+                try {
+                    if (task.isSuccessful() && task.getResult() != null && task.getResult().getToken() != null) {
+                        token.set(task.getResult().getToken());
+                    }
+                } catch (Exception ignored) {}
+                latch.countDown();
+            });
+            latch.await(6, TimeUnit.SECONDS);
+            return token.get() == null ? "" : token.get();
+        } catch (Exception e) {
+            return "";
         }
     }
 }
