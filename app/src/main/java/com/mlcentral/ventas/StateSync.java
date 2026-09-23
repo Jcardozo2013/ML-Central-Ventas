@@ -83,6 +83,10 @@ public final class StateSync {
                 body.put("type", "state_request_v1");
                 body.put("request_id", UUID.randomUUID().toString());
                 body.put("at", System.currentTimeMillis() / 1000L);
+                // v1.54: Windows v21.01 puede responder por state/current con un
+                // único PUT atómico, sin mandar 100+ ventas en bloques.
+                body.put("durable_v2", true);
+                body.put("client_version", BuildConfig.VERSION_NAME);
 
                 PostResult lastResult = new PostResult(false, "sin respuesta");
                 for (int attempt = 1; attempt <= REQUEST_ATTEMPTS; attempt++) {
@@ -163,8 +167,11 @@ public final class StateSync {
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject cmd = arr.optJSONObject(i);
                     if (cmd == null) continue;
-                    post(app, STATE_CHANGE_TITLE, cmd);
-                    try { Thread.sleep(150L); } catch (InterruptedException ignored) {}
+                    PostResult sent = post(app, STATE_CHANGE_TITLE, cmd);
+                    if (!sent.ok) {
+                        setStatus(app, "Cambio pendiente · reintentando automáticamente");
+                    }
+                    try { Thread.sleep(80L); } catch (InterruptedException ignored) {}
                 }
             } finally {
                 flushing = false;
