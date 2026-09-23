@@ -27,6 +27,8 @@ import com.google.firebase.database.ValueEventListener;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,6 +50,7 @@ public class FirebaseListenerService extends Service {
     private volatile boolean running = false;
     private Thread stateWorker;
     private Thread heartbeatWorker;
+    private Thread restFallbackWorker;
     private PowerManager.WakeLock wakeLock;
     private Query mainQuery;
     private Query rsQuery;
@@ -86,6 +89,7 @@ public class FirebaseListenerService extends Service {
             stateWorker.setDaemon(true);
             stateWorker.start();
             startHeartbeatLoop();
+            startRestFallbackLoop();
         }
         return START_STICKY;
     }
@@ -141,6 +145,106 @@ public class FirebaseListenerService extends Service {
 
     private SharedPreferences prefs() {
         return getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+    }
+
+    private void startRestFallbackLoop() {
+        if (restFallbackWorker != null && restFallbackWorker.isAlive()) return;
+        restFallbackWorker = new Thread(() -> {
+            // v1.57: algunos modelos mantienen .info/connected en TRUE pero el
+            // socket Realtime Database deja de entregar eventos. Este respaldo
+            // HTTPS recibe state/current y eventos MAIN aunque el socket esté trabado.
+            while (running) {
+                try {
+                    pollDurableStateRest();
+                    pollMainRest();
+                    Thread.sleep(10000L);
+                } catch (InterruptedException ignored) {
+                } catch (Throwable error) {
+                    try {
+                        prefs().edit()
+                                .putString("firebase_rest_last_error_v157",
+                                        error.getClass().getSimpleName() + " · " + String.valueOf(error.getMessage()))
+                                .apply();
+                    } catch (Throwable ignored) {}
+                    try { Thread.sleep(5000L); } catch (InterruptedException ignored2) {}
+                }
+            }
+        }, "MLCentralRestFallback");
+        restFallbackWorker.setDaemon(true);
+        restFallbackWorker.start();
+    }
+
+    private void pollDurableStateRest() {
+        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "state/current", 0);
+        if (!result.ok || result.data == null || result.data.length() == 0) return;
+        JSONObject root = result.data;
+        long updated = root.optLong("updated_at", 0L);
+        long seen = prefs().getLong("firebase_rest_state_updated_v157", 0L);
+        if (updated > 0L && updated <= seen) return;
+        JSONObject sales = root.optJSONObject("sales");
+        if (sales == null) return;
+        StateStore.applyDurableSnapshot(this, sales, root.optInt("total", sales.length()));
+        prefs().edit()
+                .putLong("firebase_rest_state_updated_v157", updated > 0L ? updated : System.currentTimeMillis() / 1000L)
+                .putString("firebase_rest_receive_mode_v157", "REST ACTIVO")
+                .putString("firebase_rest_last_error_v157", "")
+                .apply();
+        broadcastRefresh();
+    }
+
+    private void pollMainRest() {
+        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/main", 120);
+        if (!result.ok || result.data == null || result.data.length() == 0) return;
+
+        ArrayList<String> keys = new ArrayList<>();
+        JSONArray names = result.data.names();
+        if (names != null) {
+            for (int i = 0; i < names.length(); i++) {
+                String key = names.optString(i, "").trim();
+                if (!key.isEmpty()) keys.add(key);
+            }
+        }
+        if (keys.isEmpty()) return;
+        Collections.sort(keys);
+
+        SharedPreferences p = prefs();
+        String cursor = p.getString("firebase_rest_main_cursor_v157", "");
+        String sdkCursor = p.getString(MAIN_CURSOR, "");
+        if (cursor == null) cursor = "";
+        if (sdkCursor == null) sdkCursor = "";
+
+        // Primera ejecución: si el SDK ya había procesado algo, arrancamos desde
+        // ese punto. Si no, tomamos el mensaje más nuevo como baseline para no
+        // reproducir notificaciones históricas al instalar la actualización.
+        if (cursor.trim().isEmpty()) {
+            cursor = sdkCursor.trim();
+            if (cursor.isEmpty()) {
+                p.edit()
+                        .putString("firebase_rest_main_cursor_v157", keys.get(keys.size() - 1))
+                        .putString("firebase_rest_receive_mode_v157", "REST ACTIVO")
+                        .apply();
+                return;
+            }
+        }
+
+        String newest = cursor;
+        for (String key : keys) {
+            if (!cursor.isEmpty() && key.compareTo(cursor) <= 0) continue;
+            JSONObject item = result.data.optJSONObject(key);
+            if (item == null) continue;
+            try {
+                JSONObject msg = new JSONObject(item.toString());
+                msg.put("id", key);
+                if (!msg.has("event")) msg.put("event", "message");
+                handleMessage(msg);
+                if (key.compareTo(newest) > 0) newest = key;
+            } catch (Throwable ignored) {}
+        }
+        p.edit()
+                .putString("firebase_rest_main_cursor_v157", newest)
+                .putString("firebase_rest_receive_mode_v157", "REST ACTIVO")
+                .putString("firebase_rest_last_error_v157", "")
+                .apply();
     }
 
     private void watchConnection() {
@@ -549,6 +653,7 @@ public class FirebaseListenerService extends Service {
         SaleStore.setConnected(this, false);
         if (stateWorker != null) stateWorker.interrupt();
         if (heartbeatWorker != null) heartbeatWorker.interrupt();
+        if (restFallbackWorker != null) restFallbackWorker.interrupt();
         releaseBackgroundWakeLock();
         try { if (mainQuery != null && mainListener != null) mainQuery.removeEventListener(mainListener); } catch (Exception ignored) {}
         try { if (rsQuery != null && rsListener != null) rsQuery.removeEventListener(rsListener); } catch (Exception ignored) {}
