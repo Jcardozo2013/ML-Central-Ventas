@@ -150,13 +150,15 @@ public class FirebaseListenerService extends Service {
     private void startRestFallbackLoop() {
         if (restFallbackWorker != null && restFallbackWorker.isAlive()) return;
         restFallbackWorker = new Thread(() -> {
-            // v1.57: algunos modelos mantienen .info/connected en TRUE pero el
-            // socket Realtime Database deja de entregar eventos. Este respaldo
-            // HTTPS recibe state/current y eventos MAIN aunque el socket esté trabado.
+            // v1.58: mantenemos el respaldo que arregló los modelos problemáticos,
+            // pero sin reprocesar 120 ventas completas cada 10 segundos.
+            int cycle = 0;
             while (running) {
                 try {
-                    pollDurableStateRest();
-                    pollMainRest();
+                    pollMainRest();              // ventas/eventos: rápido
+                    if ((cycle++ % 3) == 0) {    // tablero completo: cada ~30 s
+                        pollDurableStateRest();
+                    }
                     Thread.sleep(10000L);
                 } catch (InterruptedException ignored) {
                 } catch (Throwable error) {
@@ -178,14 +180,35 @@ public class FirebaseListenerService extends Service {
         FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "state/current", 0);
         if (!result.ok || result.data == null || result.data.length() == 0) return;
         JSONObject root = result.data;
-        long updated = root.optLong("updated_at", 0L);
-        long seen = prefs().getLong("firebase_rest_state_updated_v157", 0L);
-        if (updated > 0L && updated <= seen) return;
         JSONObject sales = root.optJSONObject("sales");
         if (sales == null) return;
+
+        SharedPreferences p = prefs();
+        long updated = root.optLong("updated_at", 0L);
+        long seenUpdated = p.getLong("firebase_rest_state_updated_v157", 0L);
+
+        // Si Windows entrega versión/fecha, ésa es la comparación principal.
+        if (updated > 0L && updated <= seenUpdated) {
+            p.edit().putString("firebase_rest_receive_mode_v157", "REST ACTIVO").apply();
+            return;
+        }
+
+        // Algunas versiones no traen updated_at. En ese caso usamos una firma
+        // liviana del JSON para no volver a escribir SharedPreferences ni hacer
+        // HistoryRestore.backfill si el tablero es idéntico.
+        String signature = Integer.toHexString(sales.toString().hashCode())
+                + ":" + root.optInt("total", sales.length());
+        String previousSignature = p.getString("firebase_rest_state_hash_v158", "");
+        if (updated <= 0L && signature.equals(previousSignature)) {
+            p.edit().putString("firebase_rest_receive_mode_v157", "REST ACTIVO").apply();
+            return;
+        }
+
         StateStore.applyDurableSnapshot(this, sales, root.optInt("total", sales.length()));
-        prefs().edit()
-                .putLong("firebase_rest_state_updated_v157", updated > 0L ? updated : System.currentTimeMillis() / 1000L)
+        p.edit()
+                .putLong("firebase_rest_state_updated_v157",
+                        updated > 0L ? updated : seenUpdated)
+                .putString("firebase_rest_state_hash_v158", signature)
                 .putString("firebase_rest_receive_mode_v157", "REST ACTIVO")
                 .putString("firebase_rest_last_error_v157", "")
                 .apply();
@@ -193,7 +216,9 @@ public class FirebaseListenerService extends Service {
     }
 
     private void pollMainRest() {
-        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/main", 120);
+        // 40 eventos recientes alcanza para recuperar ventas perdidas y reduce
+        // mucho JSON/red/CPU frente a consultar 120 cada diez segundos.
+        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/main", 40);
         if (!result.ok || result.data == null || result.data.length() == 0) return;
 
         ArrayList<String> keys = new ArrayList<>();
