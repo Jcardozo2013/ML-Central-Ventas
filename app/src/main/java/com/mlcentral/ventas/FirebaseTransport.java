@@ -9,6 +9,8 @@ import com.google.firebase.database.FirebaseDatabase;
 
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
@@ -31,6 +33,17 @@ public final class FirebaseTransport {
             this.ok = ok;
             this.detail = detail == null ? "" : detail;
             this.key = key == null ? "" : key;
+        }
+    }
+
+    public static final class JsonResult {
+        public final boolean ok;
+        public final String detail;
+        public final JSONObject data;
+        JsonResult(boolean ok, String detail, JSONObject data) {
+            this.ok = ok;
+            this.detail = detail == null ? "" : detail;
+            this.data = data;
         }
     }
 
@@ -162,6 +175,63 @@ public final class FirebaseTransport {
             return new Result(false, "REST HTTP " + code, key);
         } catch (Exception e) {
             return new Result(false, "REST " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), key);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    public static JsonResult readJsonRest(Context context, String path, int limitToLast) {
+        try {
+            FirebaseConfig.ensureInitialized(context);
+            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+            if (user == null) return new JsonResult(false, "REST: sin sesión Firebase", null);
+            if (!FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
+                return new JsonResult(false, "REST: usuario no autorizado", null);
+            }
+            return readJsonRest(user, path, limitToLast, false);
+        } catch (Exception e) {
+            return new JsonResult(false, "REST " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), null);
+        }
+    }
+
+    private static JsonResult readJsonRest(FirebaseUser user, String path, int limitToLast, boolean forceRefresh) {
+        String token = getIdToken(user, forceRefresh);
+        if (token.isEmpty()) return new JsonResult(false, "REST: no se pudo obtener token Firebase", null);
+
+        HttpURLConnection conn = null;
+        try {
+            String base = FirebaseConfig.DATABASE_URL;
+            if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+            StringBuilder url = new StringBuilder(base)
+                    .append("/")
+                    .append(path == null ? "" : path.replaceAll("^/+|/+$", ""))
+                    .append(".json?auth=")
+                    .append(URLEncoder.encode(token, StandardCharsets.UTF_8.name()));
+            if (limitToLast > 0) {
+                url.append("&orderBy=%22%24key%22&limitToLast=").append(Math.max(1, Math.min(limitToLast, 250)));
+            }
+
+            conn = (HttpURLConnection) new java.net.URL(url.toString()).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(7000);
+            conn.setReadTimeout(7000);
+            conn.setRequestProperty("Accept", "application/json");
+            int code = conn.getResponseCode();
+            if ((code == 401 || code == 403) && !forceRefresh) {
+                conn.disconnect();
+                return readJsonRest(user, path, limitToLast, true);
+            }
+            if (code < 200 || code >= 300) return new JsonResult(false, "REST HTTP " + code, null);
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+            StringBuilder raw = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) raw.append(line);
+            String text = raw.toString().trim();
+            if (text.isEmpty() || "null".equals(text)) return new JsonResult(true, "REST OK", new JSONObject());
+            return new JsonResult(true, "REST OK", new JSONObject(text));
+        } catch (Exception e) {
+            return new JsonResult(false, "REST " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), null);
         } finally {
             if (conn != null) conn.disconnect();
         }
