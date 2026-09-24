@@ -60,7 +60,7 @@ public final class SyncDiagnostics {
 
     private static String findPongRest(Activity activity, String pingId) {
         try {
-            FirebaseTransport.JsonResult rr = FirebaseTransport.readJsonRest(activity, "channels/main", 120);
+            FirebaseTransport.JsonResult rr = FirebaseTransport.readJsonRest(activity, "channels/main", 40);
             if (!rr.ok || rr.data == null) return "";
             org.json.JSONArray names = rr.data.names();
             if (names == null) return "";
@@ -100,29 +100,35 @@ public final class SyncDiagnostics {
             if (!FirebaseTransport.signedIn(activity)) {
                 report.append("ERROR\nRESULTADO: no hay sesión Firebase iniciada.\n");
             } else {
-                DatabaseReference main = FirebaseDatabase.getInstance().getReference("channels/main");
+                final boolean safeMode = FirebaseTransport.lowMemorySafeMode();
+                DatabaseReference main = null;
                 CountDownLatch latch = new CountDownLatch(1);
                 AtomicReference<String> pong = new AtomicReference<>("");
                 AtomicReference<ChildEventListener> holder = new AtomicReference<>();
-                ChildEventListener listener = new ChildEventListener() {
-                    @Override public void onChildAdded(DataSnapshot snapshot, String previousChildName) {
-                        JSONObject msg = snapshotJson(snapshot);
-                        if (msg == null || !PONG_TITLE.equals(msg.optString("title", ""))) return;
-                        try {
-                            JSONObject body = new JSONObject(msg.optString("message", "{}"));
-                            if (pingId.equals(body.optString("ping_id", ""))) {
-                                pong.set(body.optString("windows_version", "Windows respondió"));
-                                latch.countDown();
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                    @Override public void onChildChanged(DataSnapshot snapshot, String previousChildName) {}
-                    @Override public void onChildRemoved(DataSnapshot snapshot) {}
-                    @Override public void onChildMoved(DataSnapshot snapshot, String previousChildName) {}
-                    @Override public void onCancelled(DatabaseError error) { latch.countDown(); }
-                };
-                holder.set(listener);
-                main.limitToLast(200).addChildEventListener(listener);
+
+                if (!safeMode) {
+                    main = FirebaseDatabase.getInstance().getReference("channels/main");
+                    ChildEventListener listener = new ChildEventListener() {
+                        @Override public void onChildAdded(DataSnapshot snapshot, String previousChildName) {
+                            JSONObject msg = snapshotJson(snapshot);
+                            if (msg == null || !PONG_TITLE.equals(msg.optString("title", ""))) return;
+                            try {
+                                JSONObject body = new JSONObject(msg.optString("message", "{}"));
+                                if (pingId.equals(body.optString("ping_id", ""))) {
+                                    pong.set(body.optString("windows_version", "Windows respondió"));
+                                    latch.countDown();
+                                }
+                            } catch (Exception ignored) {}
+                        }
+                        @Override public void onChildChanged(DataSnapshot snapshot, String previousChildName) {}
+                        @Override public void onChildRemoved(DataSnapshot snapshot) {}
+                        @Override public void onChildMoved(DataSnapshot snapshot, String previousChildName) {}
+                        @Override public void onCancelled(DatabaseError error) { latch.countDown(); }
+                    };
+                    holder.set(listener);
+                    main.limitToLast(40).addChildEventListener(listener);
+                }
+
                 try {
                     JSONObject body = new JSONObject();
                     body.put("type", "state_diag_ping_v1");
@@ -135,6 +141,7 @@ public final class SyncDiagnostics {
                     } else {
                         report.append("enviado\n");
                         report.append("Escritura usada: ").append(sent.detail).append("\n");
+                        if (safeMode) report.append("Recepción diagnóstico: REST seguro (sin websocket Firebase)\n");
                         report.append("Esperando PONG de Windows...\n");
                         long deadline = System.currentTimeMillis() + 15000L;
                         while (pong.get().trim().isEmpty() && System.currentTimeMillis() < deadline) {
@@ -157,7 +164,9 @@ public final class SyncDiagnostics {
                 } catch (Exception e) {
                     report.append("ERROR\nRESULTADO: ").append(errorText(e)).append("\n");
                 } finally {
-                    try { main.removeEventListener(holder.get()); } catch (Exception ignored) {}
+                    try {
+                        if (main != null && holder.get() != null) main.removeEventListener(holder.get());
+                    } catch (Exception ignored) {}
                 }
             }
 
