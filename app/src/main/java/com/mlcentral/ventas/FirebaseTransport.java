@@ -1,6 +1,7 @@
 package com.mlcentral.ventas;
 
 import android.content.Context;
+import android.os.Build;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -28,7 +29,12 @@ public final class FirebaseTransport {
     public static boolean lowMemorySafeMode() {
         try {
             long max = Runtime.getRuntime().maxMemory();
-            return max > 0L && max <= 192L * 1024L * 1024L;
+            String maker = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase();
+            // Activamos el modo seguro únicamente en la familia que mostró el
+            // OOM real (Xiaomi/Redmi/POCO) cuando Android limita el heap a <=192 MB.
+            // El otro celular que mantiene Firebase estable conserva tiempo real.
+            boolean xiaomiFamily = maker.contains("xiaomi") || maker.contains("redmi") || maker.contains("poco");
+            return xiaomiFamily && max > 0L && max <= 192L * 1024L * 1024L;
         } catch (Throwable ignored) {
             return false;
         }
