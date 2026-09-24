@@ -25,6 +25,15 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class FirebaseTransport {
     private FirebaseTransport() {}
 
+    public static boolean lowMemorySafeMode() {
+        try {
+            long max = Runtime.getRuntime().maxMemory();
+            return max > 0L && max <= 192L * 1024L * 1024L;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     public static final class Result {
         public final boolean ok;
         public final String detail;
@@ -76,6 +85,22 @@ public final class FirebaseTransport {
             }
 
             String path = pathForTopic(topic);
+
+            // v1.61: en teléfonos con heap Java pequeño (p.ej. 128 MB),
+            // evitar completamente el socket RTDB para escrituras. Ese socket
+            // fue la causa comprobada del OutOfMemoryError en Xiaomi/Android 15.
+            if (lowMemorySafeMode()) {
+                Map<String, Object> safeValue = new LinkedHashMap<>();
+                safeValue.put("event", "message");
+                safeValue.put("topic", topic == null ? "" : topic);
+                safeValue.put("title", title == null ? "" : title);
+                safeValue.put("message", message == null ? "" : message);
+                safeValue.put("priority", priority);
+                safeValue.put("time", System.currentTimeMillis() / 1000L);
+                if (sequenceId != null && !sequenceId.trim().isEmpty()) safeValue.put("sequence_id", sequenceId.trim());
+                return restPost(user, path, "", safeValue, false);
+            }
+
             FirebaseDatabase db = FirebaseDatabase.getInstance();
             try { db.goOnline(); } catch (Exception ignored) {}
 
