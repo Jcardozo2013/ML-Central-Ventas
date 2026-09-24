@@ -139,6 +139,12 @@ public class SaleListenerService extends FirebaseListenerService {
             recoveryInFlight = true;
         }
         try {
+            if (FirebaseTransport.lowMemorySafeMode()) {
+                recoverRecentMissedSalesRest();
+                recoveryInFlight = false;
+                return;
+            }
+
             FirebaseDatabase.getInstance()
                     .getReference("channels/main")
                     .orderByKey()
@@ -206,6 +212,69 @@ public class SaleListenerService extends FirebaseListenerService {
         } catch (Throwable error) {
             recoveryInFlight = false;
             writeEvent("recuperación reciente error: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void recoverRecentMissedSalesRest() {
+        try {
+            FirebaseTransport.JsonResult result =
+                    FirebaseTransport.readJsonRest(this, "channels/main", RECOVERY_LIMIT);
+            if (!result.ok || result.data == null || result.data.length() == 0) return;
+
+            int recovered = 0;
+            long now = System.currentTimeMillis();
+            JSONArray names = result.data.names();
+            if (names == null) return;
+
+            for (int i = 0; i < names.length(); i++) {
+                try {
+                    String key = names.optString(i, "").trim();
+                    JSONObject raw = result.data.optJSONObject(key);
+                    if (raw == null) continue;
+                    JSONObject o = new JSONObject(raw.toString());
+                    if (!o.has("id") && !key.isEmpty()) o.put("id", key);
+
+                    String title = o.optString("title", "");
+                    String upper = title.toUpperCase(Locale.ROOT);
+                    if (title.startsWith("MLC_")) continue;
+                    if (!upper.contains("VENTA") && !upper.contains("ML CENTRAL")) continue;
+                    if (upper.contains("ACTUALIZACIÓN VENTA") || upper.contains("ACTUALIZACION VENTA")) continue;
+                    if (upper.contains("PAQUETE ENTREGADO")) continue;
+
+                    long seconds = o.optLong("time", 0L);
+                    if (seconds <= 0L) continue;
+                    long age = now - seconds * 1000L;
+                    if (age < -5 * 60 * 1000L || age > RECOVERY_WINDOW_MS) continue;
+
+                    String message = o.optString("message", "Venta nueva");
+                    String saleId = recoverySaleId(o, title, message);
+                    if (saleId.isEmpty() || SaleStore.isNotified(this, saleId)) continue;
+
+                    if (SaleStore.isAcknowledged(this, saleId)) {
+                        SaleStore.markNotified(this, saleId);
+                        continue;
+                    }
+
+                    SaleStore.markSeen(this, saleId);
+                    forceUnreadHistory(saleId,
+                            title == null || title.trim().isEmpty()
+                                    ? "🛒 NUEVA VENTA — ML CENTRAL" : title,
+                            message, seconds);
+                    showRecoveredSaleNotification(saleId, title, message);
+                    SaleStore.markNotified(this, saleId);
+                    recovered++;
+                } catch (Throwable ignored) {}
+            }
+
+            if (recovered > 0) {
+                writeEvent("recuperación REST reciente: " + recovered + " venta(s)");
+                try {
+                    sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED")
+                            .setPackage(getPackageName()));
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable error) {
+            writeEvent("recuperación REST error: " + error.getClass().getSimpleName());
         }
     }
 
