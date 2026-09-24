@@ -57,6 +57,7 @@ public class DeliveryApp extends Application implements Application.ActivityLife
 
     @Override public void onCreate() {
         super.onCreate();
+        CrashManager.install(this);
         createDeliveryChannel();
         registerActivityLifecycleCallbacks(this);
         IntentFilter filter = new IntentFilter("com.mlcentral.ventas.SALE_RECEIVED");
@@ -243,6 +244,7 @@ public class DeliveryApp extends Application implements Application.ActivityLife
     }
 
     @Override public void onActivityResumed(Activity activity) {
+        CrashManager.log("ACTIVITY RESUMED · " + activity.getClass().getSimpleName());
         if (activity instanceof MainActivity) {
             MainActivity a = (MainActivity) activity;
             currentMain = new WeakReference<>(a);
@@ -251,12 +253,15 @@ public class DeliveryApp extends Application implements Application.ActivityLife
         }
     }
 
-    @Override public void onActivityPaused(Activity activity) {}
+    @Override public void onActivityPaused(Activity activity) {
+        CrashManager.log("ACTIVITY PAUSED · " + activity.getClass().getSimpleName());
+    }
     @Override public void onActivityCreated(Activity activity, Bundle savedInstanceState) {}
     @Override public void onActivityStarted(Activity activity) {}
     @Override public void onActivityStopped(Activity activity) {}
     @Override public void onActivitySaveInstanceState(Activity activity, Bundle outState) {}
     @Override public void onActivityDestroyed(Activity activity) {
+        CrashManager.log("ACTIVITY DESTROYED · " + activity.getClass().getSimpleName());
         MainActivity a = currentMain.get();
         if (a == activity) currentMain = new WeakReference<>(null);
     }
