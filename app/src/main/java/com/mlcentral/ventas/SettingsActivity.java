@@ -51,8 +51,8 @@ public class SettingsActivity extends Activity {
         String mode = prefs.getString("connection_mode", "");
         String lastError = prefs.getString("connection_last_error", "");
         String connectionText;
-        if ("live".equals(mode)) connectionText = "Conexión en vivo activa.";
-        else if ("backup".equals(mode)) connectionText = "Conectado en modo respaldo. La app consulta el canal automáticamente cada pocos segundos.";
+        if ("firebase".equals(mode) || "live".equals(mode)) connectionText = "Conexión Firebase en vivo activa.";
+        else if ("firebase-rest".equals(mode) || "backup".equals(mode)) connectionText = "Conectado por respaldo HTTPS. La app sigue recibiendo aunque el socket Firebase del teléfono sea inestable.";
         else connectionText = "Si el estado queda en reconectando, podés reiniciar el servicio sin cerrar la app.";
         TextView connText = UiKit.text(this, connectionText, 14, UiKit.MUTED, false);
         connection.addView(connText);
@@ -117,6 +117,17 @@ public class SettingsActivity extends Activity {
         toneDelivery.setOnClickListener(v -> openChannelSettings(SaleListenerService.DELIVERY_CHANNEL));
         deliveries.addView(toneDelivery, UiKit.fullWidth(this, 8, 0));
         root.addView(deliveries, UiKit.fullWidth(this, 7, 18));
+
+        root.addView(sectionTitle("DIAGNÓSTICO"));
+        LinearLayout diagnostics = UiKit.card(this);
+        TextView diagnosticsText = UiKit.text(this,
+                "Si la app se cierra o aparece «no responde», el gestor guarda automáticamente el motivo, stack, memoria y últimos eventos.",
+                14, UiKit.MUTED, false);
+        diagnostics.addView(diagnosticsText);
+        Button errorManager = primaryButton("Abrir gestor de errores / cierres");
+        errorManager.setOnClickListener(v -> startActivity(new Intent(this, DiagnosticActivity.class)));
+        diagnostics.addView(errorManager, UiKit.fullWidth(this, 12, 0));
+        root.addView(diagnostics, UiKit.fullWidth(this, 7, 18));
 
         LinearLayout info = UiKit.card(this);
         TextView version = UiKit.text(this, "ML Central Ventas · v" + BuildConfig.VERSION_NAME, 14, UiKit.TEXT, true);
