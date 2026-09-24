@@ -81,10 +81,26 @@ public class FirebaseListenerService extends Service {
         if (!running) {
             running = true;
             touchHeartbeat("listener_starting");
-            watchConnection();
-            watchDurableState();
-            attachChannel("channels/main", MAIN_CURSOR, true);
-            attachChannel("channels/rs", RS_CURSOR, false);
+
+            if (FirebaseTransport.lowMemorySafeMode()) {
+                // v1.61: en heaps pequeños no abrimos NINGÚN listener RTDB.
+                // El informe real mostró que el websocket intentó ensamblar un
+                // frame enorme y agotó el heap de 128 MB.
+                try { FirebaseDatabase.getInstance().goOffline(); } catch (Throwable ignored) {}
+                prefs().edit()
+                        .putBoolean("firebase_sdk_connected_v159", false)
+                        .putBoolean("firebase_low_memory_safe_mode_v161", true)
+                        .apply();
+                setConnectionInfo(true, "", "firebase-rest");
+                updateServiceNotification("Activo · modo seguro HTTPS");
+            } else {
+                prefs().edit().putBoolean("firebase_low_memory_safe_mode_v161", false).apply();
+                watchConnection();
+                watchDurableState();
+                attachChannel("channels/main", MAIN_CURSOR, true);
+                attachChannel("channels/rs", RS_CURSOR, false);
+            }
+
             stateWorker = new Thread(this::stateMaintenanceLoop, "MLCentralFirebaseState");
             stateWorker.setDaemon(true);
             stateWorker.start();
@@ -156,6 +172,7 @@ public class FirebaseListenerService extends Service {
             while (running) {
                 try {
                     pollMainRest();              // ventas/eventos: rápido
+                    pollRsRest();                // leídos/cambios entre celulares
                     if ((cycle++ % 3) == 0) {    // tablero completo: cada ~30 s
                         pollDurableStateRest();
                     }
@@ -215,6 +232,52 @@ public class FirebaseListenerService extends Service {
                 .putString("firebase_rest_last_error_v157", "")
                 .apply();
         broadcastRefresh();
+    }
+
+    private void pollRsRest() {
+        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/rs", 40);
+        if (!result.ok) return;
+        markRestFallbackHealthy();
+        if (result.data == null || result.data.length() == 0) return;
+
+        ArrayList<String> keys = new ArrayList<>();
+        JSONArray names = result.data.names();
+        if (names != null) {
+            for (int i = 0; i < names.length(); i++) {
+                String key = names.optString(i, "").trim();
+                if (!key.isEmpty()) keys.add(key);
+            }
+        }
+        if (keys.isEmpty()) return;
+        Collections.sort(keys);
+
+        SharedPreferences p = prefs();
+        String cursor = p.getString("firebase_rest_rs_cursor_v161", "");
+        String sdkCursor = p.getString(RS_CURSOR, "");
+        if (cursor == null) cursor = "";
+        if (sdkCursor == null) sdkCursor = "";
+
+        if (cursor.trim().isEmpty()) {
+            cursor = sdkCursor.trim();
+            if (cursor.isEmpty()) {
+                p.edit().putString("firebase_rest_rs_cursor_v161", keys.get(keys.size() - 1)).apply();
+                return;
+            }
+        }
+
+        String newest = cursor;
+        for (String key : keys) {
+            if (!cursor.isEmpty() && key.compareTo(cursor) <= 0) continue;
+            JSONObject item = result.data.optJSONObject(key);
+            if (item == null) continue;
+            try {
+                JSONObject msg = new JSONObject(item.toString());
+                msg.put("id", key);
+                if (ReadSync.isReadSync(msg)) handleReadSync(msg);
+                if (key.compareTo(newest) > 0) newest = key;
+            } catch (Throwable ignored) {}
+        }
+        p.edit().putString("firebase_rest_rs_cursor_v161", newest).apply();
     }
 
     private void pollMainRest() {
