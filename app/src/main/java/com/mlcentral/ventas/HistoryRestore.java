@@ -95,6 +95,12 @@ public final class HistoryRestore {
             out.append("\nVenta: ").append(SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)));
         }
 
+        if (row.has("br_price_unit") && !row.isNull("br_price_unit")) {
+            String br = String.format(java.util.Locale.US, "%,.2f", row.optDouble("br_price_unit", 0.0))
+                    .replace(",", "X").replace(".", ",").replace("X", ".");
+            out.append("\nPrecio BR al vender: R$").append(br).append(" c/u");
+        }
+
         String orderId = row.optString("order_id", "").trim();
         if (!orderId.isEmpty()) out.append("\nOrden: ").append(orderId);
 
