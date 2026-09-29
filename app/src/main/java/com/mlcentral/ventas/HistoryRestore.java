@@ -127,18 +127,48 @@ public final class HistoryRestore {
         }
 
         ArrayList<String> added = new ArrayList<>();
+        int refreshed = 0;
         for (JSONObject row : rows) {
             if (row == null) continue;
             String oid = row.optString("order_id", "").trim();
-            if (oid.isEmpty() || byId.containsKey(oid)) continue;
-            byId.put(oid, makeItem(oid, displayFromState(row), row.optLong("sale_unix", 0L)));
-            added.add(oid);
+            if (oid.isEmpty()) continue;
+
+            String display = displayFromState(row);
+            long saleUnix = row.optLong("sale_unix", 0L);
+            JSONObject existing = byId.get(oid);
+
+            if (existing == null) {
+                byId.put(oid, makeItem(oid, display, saleUnix));
+                added.add(oid);
+                continue;
+            }
+
+            // v1.63: Windows/Estados es la fuente autoritativa. Antes una fila
+            // histórica ya existente quedaba congelada para siempre, por eso dos
+            // celulares podían mostrar distinta ganancia/nombre para la misma orden.
+            // Conservamos lectura/título original, pero refrescamos los datos económicos.
+            JSONObject updated = new JSONObject();
+            try {
+                updated.put("saleId", oid);
+                updated.put("title", existing.optString("title", "🛒 VENTA — ML CENTRAL"));
+                updated.put("message", display);
+                long oldTime = existing.optLong("time", 0L);
+                updated.put("time", saleUnix > 0 ? saleUnix : oldTime);
+                updated.put("read", existing.optBoolean("read", true));
+                updated.put("updated", true);
+            } catch (Exception ignored) {}
+
+            String before = existing.optString("message", "");
+            long beforeTime = existing.optLong("time", 0L);
+            long afterTime = updated.optLong("time", 0L);
+            if (!before.equals(display) || beforeTime != afterTime) refreshed++;
+            byId.put(oid, updated);
         }
 
-        if (added.isEmpty()) return 0;
+        if (added.isEmpty() && refreshed == 0) return 0;
         writeSortedHistory(p, byId);
         for (String oid : added) SaleStore.markSeen(app, oid);
-        return added.size();
+        return added.size() + refreshed;
     }
 
     /**
