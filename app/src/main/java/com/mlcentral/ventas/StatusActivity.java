@@ -280,6 +280,9 @@ public class StatusActivity extends Activity {
         info.append(" · ").append(qty).append(qty == 1 ? " unidad" : " unidades");
         if (row.has("sale_amount") && !row.isNull("sale_amount")) info.append("\nVenta: ").append(SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)));
         if (row.has("profit") && !row.isNull("profit")) info.append(" · Ganancia: ").append(SaleStore.formatMoney(row.optDouble("profit", 0.0)));
+        if (row.has("br_price_unit") && !row.isNull("br_price_unit")) {
+            info.append("\nPrecio BR al vender: ").append(formatBrl(row.optDouble("br_price_unit", 0.0))).append(" c/u");
+        }
         TextView detail = UiKit.text(this, info.toString(), 13, UiKit.MUTED, false);
         card.addView(detail);
 
@@ -298,6 +301,11 @@ public class StatusActivity extends Activity {
             card.addView(b, UiKit.fullWidth(this, 12, 0));
         }
         return card;
+    }
+
+    private String formatBrl(double value) {
+        return "R$" + String.format(Locale.US, "%,.2f", value)
+                .replace(",", "X").replace(".", ",").replace("X", ".");
     }
 
     private TextView pillForStage(String stage, String label) {
