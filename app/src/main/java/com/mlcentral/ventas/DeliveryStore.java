@@ -201,9 +201,9 @@ public final class DeliveryStore {
     }
 
     /** Guarda el evento real de PAQUETE ENTREGADO recibido desde Firebase. */
-    public static synchronized void recordDirectEvent(Context c, String eventId, String message, long unixSeconds) {
+    public static synchronized boolean recordDirectEvent(Context c, String eventId, String message, long unixSeconds) {
         String id = eventId == null ? "" : eventId.trim();
-        if (id.isEmpty()) return;
+        if (id.isEmpty()) return false;
         long when = unixSeconds > 0L ? unixSeconds : System.currentTimeMillis() / 1000L;
 
         JSONObject row = findStateRow(c, id);
@@ -218,7 +218,13 @@ public final class DeliveryStore {
             d.product = firstUsefulLine(message);
         }
         d.time = when;
+        String canonical = d.id == null ? "" : d.id.trim();
+        long old = recordedAt(c, canonical);
+        if (!canonical.isEmpty() && old > 0L && Math.abs(when - old) <= DIRECT_DUP_WINDOW_SECONDS) {
+            return false;
+        }
         record(c, d);
+        return true;
     }
 
     private static String firstUsefulLine(String message) {
