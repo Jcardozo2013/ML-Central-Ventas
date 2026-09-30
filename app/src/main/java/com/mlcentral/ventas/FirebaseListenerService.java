@@ -660,7 +660,12 @@ public class FirebaseListenerService extends Service {
             String shipmentId = saleId.startsWith("delivery:") ? saleId.substring("delivery:".length()) : saleId;
             if (SaleStore.isDeliverySeen(this, shipmentId)) return;
             SaleStore.markDeliverySeen(this, shipmentId);
-            showDeliveryNotification(shipmentId, title, message);
+
+            // v1.64: una entrega puede llegar por el evento directo y segundos
+            // después por el snapshot de Estados. Se registra primero en el
+            // almacén común y solo la PRIMERA ruta puede hacer sonar el teléfono.
+            boolean freshDelivery = DeliveryStore.recordDirectEvent(this, shipmentId, message, when);
+            if (freshDelivery) showDeliveryNotification(shipmentId, title, message);
             broadcastRefresh();
             return;
         }
