@@ -115,6 +115,7 @@ public class SaleListenerService extends FirebaseListenerService {
             while (recoveryLoopRunning) {
                 try {
                     recoverRecentMissedSales();
+                    recoverRecentSalesFromState();
                     Thread.sleep(RECOVERY_INTERVAL_MS);
                 } catch (InterruptedException ignored) {
                 } catch (Throwable error) {
@@ -275,6 +276,61 @@ public class SaleListenerService extends FirebaseListenerService {
             }
         } catch (Throwable error) {
             writeEvent("recuperación REST error: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void recoverRecentSalesFromState() {
+        try {
+            long now = System.currentTimeMillis();
+            int notified = 0;
+            for (JSONObject row : StateStore.allSales(this)) {
+                if (row == null || notified >= 3) break;
+                String saleId = row.optString("order_id", "").trim();
+                if (saleId.isEmpty() || SaleStore.isNotified(this, saleId)) continue;
+
+                long saleUnix = row.optLong("sale_unix", 0L);
+                if (saleUnix <= 0L) continue;
+                long age = now - saleUnix * 1000L;
+                // Respaldo anti-silencio: solo ventas MUY recientes. No puede
+                // disparar una avalancha histórica al actualizar la APK.
+                if (age < -5 * 60 * 1000L || age > 30 * 60 * 1000L) continue;
+
+                if (SaleStore.isAcknowledged(this, saleId)) {
+                    SaleStore.markNotified(this, saleId);
+                    continue;
+                }
+
+                String product = row.optString("product", "Producto").trim();
+                if (product.isEmpty()) product = "Producto";
+                int qty = Math.max(1, row.optInt("quantity", 1));
+                StringBuilder msg = new StringBuilder(product);
+                if (row.has("br_price_unit") && !row.isNull("br_price_unit")) {
+                    String br = String.format(Locale.US, "%,.2f", row.optDouble("br_price_unit", 0.0))
+                            .replace(",", "X").replace(".", ",").replace("X", ".");
+                    msg.append("\nPrecio BR al vender: R$").append(br).append(" c/u");
+                }
+                msg.append("\nCantidad: ").append(qty);
+                if (row.has("sale_amount") && !row.isNull("sale_amount")) {
+                    msg.append("\nVenta: ").append(SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)));
+                }
+                msg.append("\nOrden: ").append(saleId);
+                if (row.has("profit") && !row.isNull("profit")) {
+                    msg.append("\nGanancia: ").append(SaleStore.formatMoney(row.optDouble("profit", 0.0)));
+                }
+
+                String title = "🛒 NUEVA VENTA — ML CENTRAL";
+                SaleStore.markSeen(this, saleId);
+                forceUnreadHistory(saleId, title, msg.toString(), saleUnix);
+                showRecoveredSaleNotification(saleId, title, msg.toString());
+                SaleStore.markNotified(this, saleId);
+                notified++;
+                writeEvent("respaldo Estados notificó venta: " + saleId);
+            }
+            if (notified > 0) {
+                sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+            }
+        } catch (Throwable error) {
+            writeEvent("respaldo Estados error: " + error.getClass().getSimpleName());
         }
     }
 
