@@ -67,12 +67,34 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         FirebaseConfig.ensureInitialized(this);
+        migrateFirebaseProjectV165();
         migrateFirebaseProjectV149();
         migrateFirebaseAppV150();
         buildUi();
         requestNotificationsIfNeeded();
         ensureFirebaseLogin();
         refresh();
+    }
+
+    private void migrateFirebaseProjectV165() {
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        if (p.getBoolean("firebase_project_v165_migrated", false)) return;
+
+        // v1.65: nuevo proyecto Firebase. Nunca reutilizar una sesión/token/cursor
+        // del proyecto anterior; el usuario inicia sesión una sola vez en ML Central 2.
+        try { FirebaseAuth.getInstance().signOut(); } catch (Exception ignored) {}
+        p.edit()
+                .remove("firebase_main_cursor_v120")
+                .remove("firebase_rs_cursor_v120")
+                .remove("firebase_rest_main_cursor_v157")
+                .remove("firebase_rest_rs_cursor_v161")
+                .remove("firebase_rest_state_updated_v157")
+                .remove("firebase_rest_state_hash_v158")
+                .remove("firebase_sdk_connected_v159")
+                .putLong("state_request_last_at_v1", 0L)
+                .putLong("full_history_request_last_at_v3", 0L)
+                .putBoolean("firebase_project_v165_migrated", true)
+                .apply();
     }
 
     private void migrateFirebaseProjectV149() {
