@@ -35,6 +35,9 @@ public class MainActivity extends Activity {
     private TextView historyStatus;
     private TextView stateStatus;
     private TextView backgroundStatus;
+    private TextView firebaseUsageStatus;
+    private TextView firebaseUsageDetail;
+    private TextView firebaseUsageCleanup;
     private Button unread;
     private TextView todaySales;
     private TextView todayProfit;
@@ -54,6 +57,7 @@ public class MainActivity extends Activity {
                 ReadSync.requestHistoryOnceAsync(MainActivity.this);
                 StateSync.requestSnapshotAsync(MainActivity.this, false);
                 StateSync.flushPendingAsync(MainActivity.this);
+                FirebaseUsageMonitor.refreshAsync(MainActivity.this, true);
             }
             refresh();
             handler.postDelayed(this, 120000L);
@@ -218,6 +222,7 @@ public class MainActivity extends Activity {
             StateSync.requestSnapshotAsync(this, true);
             StateSync.flushPendingAsync(this);
         }
+        FirebaseUsageMonitor.refreshAsync(this, true);
     }
 
     private void buildUi() {
@@ -257,6 +262,23 @@ public class MainActivity extends Activity {
         backgroundStatus.setPadding(0, UiKit.dp(this, 5), 0, 0);
         connectionCard.addView(backgroundStatus);
         root.addView(connectionCard, UiKit.fullWidth(this, 0, 12));
+
+        LinearLayout firebaseCard = UiKit.card(this);
+        TextView firebaseTitle = UiKit.text(this, "Estado Firebase", 18, UiKit.TEXT, true);
+        firebaseCard.addView(firebaseTitle);
+        firebaseUsageStatus = UiKit.text(this, "⚪ Firebase: esperando primera medición…", 15, UiKit.MUTED, true);
+        firebaseUsageStatus.setPadding(0, UiKit.dp(this, 8), 0, 0);
+        firebaseCard.addView(firebaseUsageStatus);
+        firebaseUsageDetail = UiKit.text(this, "Main: — · RS: — · Movimientos: —", 13, UiKit.MUTED, false);
+        firebaseUsageDetail.setPadding(0, UiKit.dp(this, 5), 0, 0);
+        firebaseCard.addView(firebaseUsageDetail);
+        firebaseUsageCleanup = UiKit.text(this, "Windows todavía no publicó el estado de almacenamiento.", 12, UiKit.MUTED, false);
+        firebaseUsageCleanup.setPadding(0, UiKit.dp(this, 5), 0, 0);
+        firebaseCard.addView(firebaseUsageCleanup);
+        TextView firebaseNote = UiKit.text(this, "Referencia automática del espacio usado por ML Central. Amarillo desde 70% · rojo desde 80%.", 11, UiKit.MUTED, false);
+        firebaseNote.setPadding(0, UiKit.dp(this, 6), 0, 0);
+        firebaseCard.addView(firebaseNote);
+        root.addView(firebaseCard, UiKit.fullWidth(this, 0, 12));
 
         unread = UiKit.button(this, "0 ventas nuevas");
         unread.setTextSize(16);
@@ -463,6 +485,14 @@ public class MainActivity extends Activity {
             backgroundStatus.setTextColor(UiKit.ORANGE);
         }
 
+        firebaseUsageStatus.setText(FirebaseUsageMonitor.summary(this));
+        int usageLevel = FirebaseUsageMonitor.level(this);
+        firebaseUsageStatus.setTextColor(
+                FirebaseUsageMonitor.stale(this) ? UiKit.ORANGE
+                        : (usageLevel >= 2 ? Color.rgb(185, 28, 28) : (usageLevel == 1 ? UiKit.ORANGE : UiKit.GREEN)));
+        firebaseUsageDetail.setText(FirebaseUsageMonitor.detail(this));
+        firebaseUsageCleanup.setText(FirebaseUsageMonitor.cleanupText(this));
+
         todaySales.setText(String.valueOf(SaleStore.todaySaleCount(this)));
         todayProfit.setText(SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
         monthProfit.setText(SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
@@ -494,6 +524,7 @@ public class MainActivity extends Activity {
             ReadSync.requestHistoryOnceAsync(this);
             StateSync.requestSnapshotAsync(this, false);
             StateSync.flushPendingAsync(this);
+            FirebaseUsageMonitor.refreshAsync(this, true);
         } else {
             ensureFirebaseLogin();
         }
