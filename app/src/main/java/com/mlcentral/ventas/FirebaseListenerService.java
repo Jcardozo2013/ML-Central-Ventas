@@ -173,9 +173,13 @@ public class FirebaseListenerService extends Service {
                 try {
                     pollMainRest();              // ventas/eventos: rápido
                     pollRsRest();                // leídos/cambios entre celulares
-                    if ((cycle++ % 3) == 0) {    // tablero completo: cada ~30 s
+                    if ((cycle % 3) == 0) {      // tablero completo: cada ~30 s
                         pollDurableStateRest();
                     }
+                    if ((cycle % 30) == 0) {     // monitor de espacio: cada ~5 min, payload mínimo
+                        FirebaseUsageMonitor.refreshNow(this, true);
+                    }
+                    cycle++;
                     Thread.sleep(10000L);
                 } catch (InterruptedException ignored) {
                 } catch (Throwable error) {
