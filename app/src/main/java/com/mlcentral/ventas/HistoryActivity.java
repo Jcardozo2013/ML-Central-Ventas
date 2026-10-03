@@ -391,8 +391,10 @@ public class HistoryActivity extends Activity {
         NumberPicker year = new NumberPicker(this);
         int currentYear = Calendar.getInstance().get(Calendar.YEAR);
         int earliest = Math.min(MonthlyStats.earliestYear(this), currentYear);
-        year.setMinValue(Math.max(2000, earliest - 1));
-        year.setMaxValue(currentYear + 1);
+        int minYear = Math.min(Math.max(2000, earliest - 1), selectedYear);
+        int maxYear = Math.max(currentYear + 1, selectedYear);
+        year.setMinValue(minYear);
+        year.setMaxValue(maxYear);
         year.setValue(selectedYear);
         year.setWrapSelectorWheel(false);
 
