@@ -154,6 +154,7 @@ public final class SaleStore {
             }
         }
         p.edit().putString("history", out.toString()).putInt("unread", countUnread(out)).apply();
+        MonthlyStats.rebuild(c);
     }
 
     private static int countUnread(JSONArray arr) {
