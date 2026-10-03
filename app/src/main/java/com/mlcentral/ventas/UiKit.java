@@ -12,16 +12,18 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public final class UiKit {
-    public static final int BG = Color.rgb(245, 247, 251);
+    public static final int BG = Color.rgb(246, 248, 252);
     public static final int CARD = Color.WHITE;
-    public static final int TEXT = Color.rgb(31, 41, 55);
-    public static final int MUTED = Color.rgb(107, 114, 128);
+    public static final int TEXT = Color.rgb(22, 31, 48);
+    public static final int MUTED = Color.rgb(100, 116, 139);
     public static final int ACCENT = Color.rgb(37, 99, 235);
-    public static final int ACCENT_SOFT = Color.rgb(235, 242, 255);
-    public static final int GREEN = Color.rgb(21, 128, 61);
-    public static final int GREEN_SOFT = Color.rgb(232, 247, 237);
-    public static final int ORANGE = Color.rgb(180, 83, 9);
-    public static final int ORANGE_SOFT = Color.rgb(255, 247, 237);
+    public static final int ACCENT_SOFT = Color.rgb(239, 246, 255);
+    public static final int GREEN = Color.rgb(22, 163, 74);
+    public static final int GREEN_SOFT = Color.rgb(240, 253, 244);
+    public static final int ORANGE = Color.rgb(202, 112, 5);
+    public static final int ORANGE_SOFT = Color.rgb(255, 251, 235);
+    public static final int RED = Color.rgb(185, 28, 28);
+    public static final int RED_SOFT = Color.rgb(254, 242, 242);
     public static final int BORDER = Color.rgb(226, 232, 240);
 
     private UiKit() {}
@@ -35,7 +37,9 @@ public final class UiKit {
         t.setText(value);
         t.setTextSize(size);
         t.setTextColor(color);
-        if (bold) t.setTypeface(null, Typeface.BOLD);
+        t.setLineSpacing(0f, 1.06f);
+        if (bold) t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        else t.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         return t;
     }
 
@@ -55,32 +59,45 @@ public final class UiKit {
     public static LinearLayout card(Activity a) {
         LinearLayout c = new LinearLayout(a);
         c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(a, 16), dp(a, 15), dp(a, 16), dp(a, 15));
-        c.setBackground(roundedStroke(CARD, 16, BORDER, a));
+        c.setPadding(dp(a, 18), dp(a, 17), dp(a, 18), dp(a, 17));
+        c.setBackground(roundedStroke(CARD, 22, BORDER, a));
+        c.setElevation(dp(a, 1));
         return c;
     }
 
     public static Button button(Activity a, String label) {
         Button b = new Button(a);
         b.setText(label);
-        b.setTextSize(15);
+        b.setTextSize(14);
         b.setAllCaps(false);
         b.setTextColor(TEXT);
-        b.setBackground(roundedStroke(CARD, 12, BORDER, a));
-        b.setMinHeight(dp(a, 48));
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        b.setBackground(roundedStroke(CARD, 14, BORDER, a));
+        b.setMinHeight(dp(a, 46));
+        b.setPadding(dp(a, 13), 0, dp(a, 13), 0);
+        b.setStateListAnimator(null);
+        return b;
+    }
+
+    public static Button primaryButton(Activity a, String label) {
+        Button b = button(a, label);
+        b.setTextColor(Color.WHITE);
+        b.setBackground(rounded(ACCENT, 14, a));
         return b;
     }
 
     public static void setSelected(Button b, Activity a, boolean selected) {
         b.setTextColor(selected ? Color.WHITE : TEXT);
-        b.setBackground(selected ? rounded(ACCENT, 12, a) : roundedStroke(CARD, 12, BORDER, a));
+        b.setBackground(selected
+                ? rounded(ACCENT, 14, a)
+                : roundedStroke(CARD, 14, BORDER, a));
     }
 
     public static TextView pill(Activity a, String label, int textColor, int bgColor) {
         TextView t = text(a, label, 12, textColor, true);
         t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(a, 10), dp(a, 5), dp(a, 10), dp(a, 5));
-        t.setBackground(rounded(bgColor, 20, a));
+        t.setPadding(dp(a, 11), dp(a, 6), dp(a, 11), dp(a, 6));
+        t.setBackground(rounded(bgColor, 99, a));
         return t;
     }
 
@@ -88,8 +105,9 @@ public final class UiKit {
         LinearLayout nav = new LinearLayout(a);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
-        nav.setPadding(dp(a, 8), dp(a, 8), dp(a, 8), dp(a, 10));
+        nav.setPadding(dp(a, 10), dp(a, 9), dp(a, 10), dp(a, 11));
         nav.setBackground(roundedStroke(Color.WHITE, 0, BORDER, a));
+        nav.setElevation(dp(a, 10));
 
         int selectedIndex = selected;
         if (a instanceof MainActivity) selectedIndex = 0;
@@ -98,18 +116,22 @@ public final class UiKit {
         else if (a instanceof SettingsActivity) selectedIndex = 3;
 
         final int selectedFinal = selectedIndex;
-        String[] labels = {"Inicio", "Estados", "Historial", "Config."};
+        String[] labels = {"⌂  Inicio", "▦  Estados", "◷  Historial", "⚙  Config."};
         Class<?>[] screens = {MainActivity.class, StatusActivity.class, HistoryActivity.class, SettingsActivity.class};
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
             Button b = new Button(a);
             b.setText(labels[i]);
             b.setAllCaps(false);
-            b.setTextSize(13);
-            b.setMinHeight(dp(a, 48));
+            b.setTextSize(12);
+            b.setMinHeight(dp(a, 50));
+            b.setPadding(dp(a, 5), 0, dp(a, 5), 0);
             b.setTextColor(i == selectedFinal ? ACCENT : MUTED);
-            b.setTypeface(null, i == selectedFinal ? Typeface.BOLD : Typeface.NORMAL);
-            b.setBackground(i == selectedFinal ? rounded(ACCENT_SOFT, 12, a) : rounded(Color.TRANSPARENT, 12, a));
+            b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            b.setBackground(i == selectedFinal
+                    ? rounded(ACCENT_SOFT, 15, a)
+                    : rounded(Color.TRANSPARENT, 15, a));
+            b.setStateListAnimator(null);
             b.setEnabled(i != selectedFinal);
             b.setOnClickListener(v -> {
                 Intent intent = new Intent(a, screens[index]);
@@ -124,7 +146,9 @@ public final class UiKit {
     }
 
     public static LinearLayout.LayoutParams fullWidth(Activity a, int top, int bottom) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
         p.setMargins(0, dp(a, top), 0, dp(a, bottom));
         return p;
     }

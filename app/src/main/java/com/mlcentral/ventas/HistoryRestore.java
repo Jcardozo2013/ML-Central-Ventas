@@ -63,6 +63,7 @@ public final class HistoryRestore {
 
         writeSortedHistory(p, byId);
         SaleStore.markSeen(app, wanted);
+        MonthlyStats.rebuild(app);
     }
 
     private static void writeSortedHistory(SharedPreferences p, Map<String, JSONObject> byId) {
@@ -168,6 +169,7 @@ public final class HistoryRestore {
         if (added.isEmpty() && refreshed == 0) return 0;
         writeSortedHistory(p, byId);
         for (String oid : added) SaleStore.markSeen(app, oid);
+        MonthlyStats.rebuild(app);
         return added.size() + refreshed;
     }
 
@@ -299,7 +301,10 @@ public final class HistoryRestore {
 
         // Si Windows omitió del flujo de historial una venta que sí existe en
         // el tablero de Estados, la recuperamos inmediatamente al terminar.
-        if (complete) backfillFromCurrentStates(app);
+        if (complete) {
+            backfillFromCurrentStates(app);
+            MonthlyStats.rebuild(app);
+        }
     }
 
     private static int historyCount(Context context) {
