@@ -299,7 +299,10 @@ public final class HistoryRestore {
 
         // Si Windows omitió del flujo de historial una venta que sí existe en
         // el tablero de Estados, la recuperamos inmediatamente al terminar.
-        if (complete) backfillFromCurrentStates(app);
+        if (complete) {
+            backfillFromCurrentStates(app);
+            MonthlyStats.rebuild(app);
+        }
     }
 
     private static int historyCount(Context context) {
