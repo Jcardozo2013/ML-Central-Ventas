@@ -44,6 +44,15 @@ public class MainActivity extends Activity {
     private TextView todayProfit;
     private TextView monthSold;
     private TextView monthProfit;
+    private TextView paceTitle;
+    private TextView paceCurrentPeriod;
+    private TextView paceCurrentSales;
+    private TextView paceCurrentProfit;
+    private TextView pacePreviousPeriod;
+    private TextView pacePreviousSales;
+    private TextView pacePreviousProfit;
+    private TextView paceResult;
+    private TextView paceNote;
     private TextView pendingBuy;
     private TextView inTransit;
     private TextView pendingRocha;
@@ -324,7 +333,66 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams monthSecond = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         monthSecond.setMargins(UiKit.dp(this, 10), 0, 0, 0);
         monthRow.addView(monthProfitCard, monthSecond);
-        root.addView(monthRow, UiKit.fullWidth(this, 10, 18));
+        root.addView(monthRow, UiKit.fullWidth(this, 10, 12));
+
+        LinearLayout paceCard = UiKit.card(this);
+        paceTitle = UiKit.text(this, "RITMO DEL MES", 12, UiKit.ACCENT, true);
+        paceTitle.setLetterSpacing(0.08f);
+        paceCard.addView(paceTitle);
+
+        TextView paceSubtitle = UiKit.text(this,
+                "Comparación contra el mismo período del mes anterior.", 13, UiKit.MUTED, false);
+        paceSubtitle.setPadding(0, UiKit.dp(this, 5), 0, UiKit.dp(this, 12));
+        paceCard.addView(paceSubtitle);
+
+        LinearLayout paceRow = new LinearLayout(this);
+        paceRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        LinearLayout paceCurrentBox = new LinearLayout(this);
+        paceCurrentBox.setOrientation(LinearLayout.VERTICAL);
+        paceCurrentBox.setPadding(UiKit.dp(this, 13), UiKit.dp(this, 12), UiKit.dp(this, 13), UiKit.dp(this, 12));
+        paceCurrentBox.setBackground(UiKit.rounded(UiKit.ACCENT_SOFT, 16, this));
+        paceCurrentPeriod = UiKit.text(this, "ESTE MES", 11, UiKit.ACCENT, true);
+        paceCurrentPeriod.setLetterSpacing(0.05f);
+        paceCurrentBox.addView(paceCurrentPeriod);
+        paceCurrentSales = UiKit.text(this, "0 ventas", 18, UiKit.TEXT, true);
+        paceCurrentSales.setPadding(0, UiKit.dp(this, 7), 0, 0);
+        paceCurrentBox.addView(paceCurrentSales);
+        paceCurrentProfit = UiKit.text(this, "$0,00 ganancia", 14, UiKit.GREEN, true);
+        paceCurrentProfit.setPadding(0, UiKit.dp(this, 3), 0, 0);
+        paceCurrentBox.addView(paceCurrentProfit);
+        paceRow.addView(paceCurrentBox,
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout pacePreviousBox = new LinearLayout(this);
+        pacePreviousBox.setOrientation(LinearLayout.VERTICAL);
+        pacePreviousBox.setPadding(UiKit.dp(this, 13), UiKit.dp(this, 12), UiKit.dp(this, 13), UiKit.dp(this, 12));
+        pacePreviousBox.setBackground(UiKit.rounded(UiKit.BG, 16, this));
+        pacePreviousPeriod = UiKit.text(this, "MES ANTERIOR", 11, UiKit.MUTED, true);
+        pacePreviousPeriod.setLetterSpacing(0.05f);
+        pacePreviousBox.addView(pacePreviousPeriod);
+        pacePreviousSales = UiKit.text(this, "0 ventas", 18, UiKit.TEXT, true);
+        pacePreviousSales.setPadding(0, UiKit.dp(this, 7), 0, 0);
+        pacePreviousBox.addView(pacePreviousSales);
+        pacePreviousProfit = UiKit.text(this, "$0,00 ganancia", 14, UiKit.MUTED, true);
+        pacePreviousProfit.setPadding(0, UiKit.dp(this, 3), 0, 0);
+        pacePreviousBox.addView(pacePreviousProfit);
+        LinearLayout.LayoutParams pacePrevParams =
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        pacePrevParams.setMargins(UiKit.dp(this, 9), 0, 0, 0);
+        paceRow.addView(pacePreviousBox, pacePrevParams);
+        paceCard.addView(paceRow);
+
+        paceResult = UiKit.text(this, "Calculando comparación…", 18, UiKit.TEXT, true);
+        paceResult.setPadding(0, UiKit.dp(this, 13), 0, 0);
+        paceCard.addView(paceResult);
+
+        paceNote = UiKit.text(this,
+                "El porcentaje se calcula únicamente sobre la ganancia.", 12, UiKit.MUTED, false);
+        paceNote.setPadding(0, UiKit.dp(this, 5), 0, 0);
+        paceCard.addView(paceNote);
+
+        root.addView(paceCard, UiKit.fullWidth(this, 0, 18));
 
         LinearLayout opHeading = new LinearLayout(this);
         opHeading.setOrientation(LinearLayout.HORIZONTAL);
@@ -385,6 +453,19 @@ public class MainActivity extends Activity {
 
         shell.addView(UiKit.bottomNav(this, 0), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         setContentView(shell);
+    }
+
+    private String shortMonthLabel(int year, int month) {
+        Calendar c = Calendar.getInstance();
+        c.clear();
+        c.set(year, month, 1);
+        String value = new SimpleDateFormat("MMM", Locale.getDefault()).format(c.getTime());
+        if (value == null || value.trim().isEmpty()) return "MES";
+        return value.trim().toUpperCase(Locale.getDefault());
+    }
+
+    private String salesLabel(int count) {
+        return count + (count == 1 ? " venta" : " ventas");
     }
 
     private LinearLayout metricCard(String label) {
@@ -516,6 +597,55 @@ public class MainActivity extends Activity {
         monthSold.setText(SaleStore.formatMoney(monthly.soldTotal)
                 + (monthly.missingSaleAmount > 0 ? "\n" + monthly.missingSaleAmount + " sin importe" : ""));
         monthProfit.setText(SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
+
+        MonthPaceStats.Pace pace = MonthPaceStats.calculate(this);
+        paceTitle.setText("RITMO DEL MES · HASTA EL DÍA " + pace.compareDay);
+        paceCurrentPeriod.setText(shortMonthLabel(pace.currentYear, pace.currentMonth));
+        pacePreviousPeriod.setText(shortMonthLabel(pace.previousYear, pace.previousMonth));
+        paceCurrentSales.setText(salesLabel(pace.currentSales));
+        pacePreviousSales.setText(salesLabel(pace.previousSales));
+        paceCurrentProfit.setText(SaleStore.formatMoney(pace.currentProfit) + " ganancia");
+        pacePreviousProfit.setText(SaleStore.formatMoney(pace.previousProfit) + " ganancia");
+
+        if (!pace.complete()) {
+            paceResult.setText("⚠ Comparación parcial");
+            paceResult.setTextColor(UiKit.ORANGE);
+            int missing = pace.currentMissingProfit + pace.previousMissingProfit;
+            paceNote.setText("Hay " + missing + (missing == 1
+                    ? " venta sin ganancia confirmada. No muestro un % engañoso."
+                    : " ventas sin ganancia confirmada. No muestro un % engañoso."));
+            paceNote.setTextColor(UiKit.ORANGE);
+        } else if (!pace.comparable) {
+            if (pace.currentProfit > pace.previousProfit && pace.currentProfit > 0.0) {
+                paceResult.setText("↑ Vas mejor, pero sin % comparable");
+                paceResult.setTextColor(UiKit.GREEN);
+            } else if (pace.currentProfit < pace.previousProfit) {
+                paceResult.setText("↓ Vas por debajo, pero sin % comparable");
+                paceResult.setTextColor(UiKit.RED);
+            } else {
+                paceResult.setText("Sin variación comparable");
+                paceResult.setTextColor(UiKit.MUTED);
+            }
+            paceNote.setText("El mes anterior no tiene una ganancia positiva para calcular un porcentaje válido.");
+            paceNote.setTextColor(UiKit.MUTED);
+        } else {
+            double pct = pace.percentChange;
+            String pctText = String.format(Locale.getDefault(), "%.1f%%", Math.abs(pct));
+            if (pct > 0.05) {
+                paceResult.setText("↑ Vas " + pctText + " mejor en ganancia");
+                paceResult.setTextColor(UiKit.GREEN);
+            } else if (pct < -0.05) {
+                paceResult.setText("↓ Vas " + pctText + " peor en ganancia");
+                paceResult.setTextColor(UiKit.RED);
+            } else {
+                paceResult.setText("≈ Vas prácticamente igual · " + pctText);
+                paceResult.setTextColor(UiKit.MUTED);
+            }
+            paceNote.setText("Compara días 1–" + pace.compareDay
+                    + " · porcentaje calculado únicamente sobre la ganancia.");
+            paceNote.setTextColor(UiKit.MUTED);
+        }
+
         pendingBuy.setText(String.valueOf(StateStore.countStage(this, "purchase_pending")));
         inTransit.setText(String.valueOf(StateStore.countStage(this, "receive_pending")));
         pendingRocha.setText(String.valueOf(StateStore.countStage(this, "pending_rocha")));
