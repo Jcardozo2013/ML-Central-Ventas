@@ -26,6 +26,7 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
 
@@ -41,6 +42,7 @@ public class MainActivity extends Activity {
     private Button unread;
     private TextView todaySales;
     private TextView todayProfit;
+    private TextView monthSold;
     private TextView monthProfit;
     private TextView pendingBuy;
     private TextView inTransit;
@@ -306,10 +308,23 @@ public class MainActivity extends Activity {
         row.addView(profitCard, second);
         root.addView(row);
 
-        LinearLayout monthCard = metricCard("GANANCIA DEL MES");
+        LinearLayout monthRow = new LinearLayout(this);
+        monthRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        LinearLayout monthSoldCard = metricCard("VENDIDO ESTE MES");
+        monthSold = metricValue("$0,00");
+        monthSoldCard.addView(monthSold);
+        monthSoldCard.setOnClickListener(v -> startActivity(new Intent(this, HistoryActivity.class)));
+        monthRow.addView(monthSoldCard, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout monthProfitCard = metricCard("GANANCIA DEL MES");
         monthProfit = metricValue("$0,00");
-        monthCard.addView(monthProfit);
-        root.addView(monthCard, UiKit.fullWidth(this, 10, 18));
+        monthProfitCard.addView(monthProfit);
+        monthProfitCard.setOnClickListener(v -> startActivity(new Intent(this, HistoryActivity.class)));
+        LinearLayout.LayoutParams monthSecond = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        monthSecond.setMargins(UiKit.dp(this, 10), 0, 0, 0);
+        monthRow.addView(monthProfitCard, monthSecond);
+        root.addView(monthRow, UiKit.fullWidth(this, 10, 18));
 
         LinearLayout opHeading = new LinearLayout(this);
         opHeading.setOrientation(LinearLayout.HORIZONTAL);
@@ -495,6 +510,11 @@ public class MainActivity extends Activity {
 
         todaySales.setText(String.valueOf(SaleStore.todaySaleCount(this)));
         todayProfit.setText(SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
+
+        Calendar nowMonth = Calendar.getInstance();
+        MonthlyStats.Stats monthly = MonthlyStats.get(this, nowMonth.get(Calendar.YEAR), nowMonth.get(Calendar.MONTH));
+        monthSold.setText(SaleStore.formatMoney(monthly.soldTotal)
+                + (monthly.missingSaleAmount > 0 ? "\n" + monthly.missingSaleAmount + " sin importe" : ""));
         monthProfit.setText(SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
         pendingBuy.setText(String.valueOf(StateStore.countStage(this, "purchase_pending")));
         inTransit.setText(String.valueOf(StateStore.countStage(this, "receive_pending")));
