@@ -63,6 +63,7 @@ public final class HistoryRestore {
 
         writeSortedHistory(p, byId);
         SaleStore.markSeen(app, wanted);
+        MonthlyStats.rebuild(app);
     }
 
     private static void writeSortedHistory(SharedPreferences p, Map<String, JSONObject> byId) {
@@ -168,6 +169,7 @@ public final class HistoryRestore {
         if (added.isEmpty() && refreshed == 0) return 0;
         writeSortedHistory(p, byId);
         for (String oid : added) SaleStore.markSeen(app, oid);
+        MonthlyStats.rebuild(app);
         return added.size() + refreshed;
     }
 
