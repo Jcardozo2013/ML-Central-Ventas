@@ -320,6 +320,11 @@ public class MainActivity extends Activity {
         });
         root.addView(unread, UiKit.fullWidth(this, 0, 18));
 
+        // Acceso opcional: no dispara consultas extra a Firebase al abrir Inicio.
+        Button dailyWork = UiKit.primaryButton(this, "Mi trabajo de hoy  ›");
+        dailyWork.setOnClickListener(v -> startActivity(new Intent(this, DailyWorkActivity.class)));
+        root.addView(dailyWork, UiKit.fullWidth(this, 0, 12));
+
         TextView section = UiKit.text(this, "Resumen", 20, UiKit.TEXT, true);
         root.addView(section, UiKit.fullWidth(this, 0, 10));
 
