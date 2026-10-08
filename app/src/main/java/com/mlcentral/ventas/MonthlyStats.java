@@ -16,6 +16,9 @@ import java.util.Locale;
 
 public final class MonthlyStats {
     private static final String KEY = "monthly_stats_v167";
+    // Los totales económicos se calculan exclusivamente desde ventas
+    // vigentes enviadas por Windows, no desde mensajes históricos.
+    private static final String VALID_KEY = "monthly_stats_valid_v173";
 
     public static final class Stats {
         public final int year;
@@ -103,10 +106,79 @@ public final class MonthlyStats {
                 .apply();
     }
 
-    public static synchronized Stats get(Context context, int year, int month) {
-        ensureBuilt(context);
+    /**
+     * Reconstruye todos los meses usando únicamente el tablero de ventas
+     * válidas ("paid") publicado desde Windows. Se llama también cuando un
+     * snapshot excluye una orden cancelada; así desaparece del total sin
+     * destruir la notificación/historial conservado en el celular.
+     */
+    public static synchronized void rebuildFromStateObject(Context context, JSONObject sales) {
+        if (context == null || sales == null) return;
+        JSONObject grouped = new JSONObject();
+        JSONArray ids = sales.names();
         try {
-            JSONObject root = new JSONObject(prefs(context).getString(KEY, "{}"));
+            if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                JSONObject row = sales.optJSONObject(ids.optString(i));
+                if (row == null) continue;
+                long unix = row.optLong("sale_unix", 0L);
+                if (unix <= 0L) continue;
+
+                Calendar c = Calendar.getInstance();
+                c.setTimeInMillis(unix * 1000L);
+                int year = c.get(Calendar.YEAR);
+                int month = c.get(Calendar.MONTH);
+                String key = keyFor(year, month);
+                JSONObject acc = grouped.optJSONObject(key);
+                if (acc == null) {
+                    acc = new JSONObject();
+                    acc.put("year", year);
+                    acc.put("month", month);
+                    acc.put("sales_count", 0);
+                    acc.put("sold_total", 0.0);
+                    acc.put("profit_total", 0.0);
+                    acc.put("missing_sale_amount", 0);
+                    acc.put("missing_profit", 0);
+                    grouped.put(key, acc);
+                }
+                acc.put("sales_count", acc.optInt("sales_count", 0) + 1);
+                if (row.has("sale_amount") && !row.isNull("sale_amount")) {
+                    acc.put("sold_total", acc.optDouble("sold_total", 0.0)
+                            + row.optDouble("sale_amount", 0.0));
+                } else {
+                    acc.put("missing_sale_amount", acc.optInt("missing_sale_amount", 0) + 1);
+                }
+                if (row.has("profit") && !row.isNull("profit")) {
+                    acc.put("profit_total", acc.optDouble("profit_total", 0.0)
+                            + row.optDouble("profit", 0.0));
+                } else {
+                    acc.put("missing_profit", acc.optInt("missing_profit", 0) + 1);
+                }
+            }
+            prefs(context).edit().putString(VALID_KEY, grouped.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    /** Migración una sola vez al abrir versiones anteriores con datos vigentes. */
+    private static void ensureAuthoritativeBuilt(Context context) {
+        SharedPreferences p = prefs(context);
+        if (StateStore.lastSyncAt(context) > 0L && !p.contains(VALID_KEY)) {
+            rebuildFromStateObject(context, StateStore.snapshotSales(context));
+        }
+    }
+
+    private static String activeStatsKey(Context context) {
+        if (StateStore.lastSyncAt(context) > 0L) {
+            ensureAuthoritativeBuilt(context);
+            if (prefs(context).contains(VALID_KEY)) return VALID_KEY;
+        }
+        ensureBuilt(context);
+        return KEY;
+    }
+
+    public static synchronized Stats get(Context context, int year, int month) {
+        String sourceKey = activeStatsKey(context);
+        try {
+            JSONObject root = new JSONObject(prefs(context).getString(sourceKey, "{}"));
             JSONObject o = root.optJSONObject(keyFor(year, month));
             if (o == null) return new Stats(year, month, 0, 0.0, 0.0, 0, 0);
             return new Stats(
@@ -124,10 +196,10 @@ public final class MonthlyStats {
     }
 
     public static synchronized List<String> availableKeys(Context context) {
-        ensureBuilt(context);
+        String sourceKey = activeStatsKey(context);
         ArrayList<String> out = new ArrayList<>();
         try {
-            JSONObject root = new JSONObject(prefs(context).getString(KEY, "{}"));
+            JSONObject root = new JSONObject(prefs(context).getString(sourceKey, "{}"));
             Iterator<String> it = root.keys();
             while (it.hasNext()) {
                 String key = it.next();
