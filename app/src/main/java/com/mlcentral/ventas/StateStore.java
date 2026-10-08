@@ -14,6 +14,8 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.HashSet;
 
 public final class StateStore {
     private static final String FINAL_KEY = "state_sales_v1";
@@ -35,6 +37,8 @@ public final class StateStore {
         public int receivePending;
         public int pendingRocha;
         public int delivered;
+        // Coincide exactamente con las ventas que alimentan todaySales/todayProfit.
+        public final Set<String> todayValidOrderIds = new HashSet<>();
     }
 
     private static SharedPreferences prefs(Context c) {
@@ -243,6 +247,9 @@ public final class StateStore {
             double profit = hasProfit ? row.optDouble("profit", 0.0) : 0.0;
 
             if (today) {
+                String id = row.optString("order_id", names.optString(i)).trim();
+                if (id.isEmpty()) id = names.optString(i).trim();
+                if (!id.isEmpty()) out.todayValidOrderIds.add(id);
                 out.todaySales++;
                 if (hasProfit) out.todayProfit += profit;
                 else out.todayPendingProfit++;
