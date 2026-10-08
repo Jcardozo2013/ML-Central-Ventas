@@ -13,6 +13,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -32,6 +34,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -60,6 +64,23 @@ public class FirebaseListenerService extends Service {
     private ValueEventListener connectedListener;
     private DatabaseReference durableStateRef;
     private ValueEventListener durableStateListener;
+
+    // Todo el procesamiento pesado de Firebase va por una única cola de fondo.
+    // Así conservamos el orden de los eventos y nunca bloqueamos el hilo principal.
+    private final ExecutorService dataExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "MLCentralFirebaseData");
+        t.setDaemon(true);
+        return t;
+    });
+
+    // Muchos eventos pueden llegar seguidos (snapshot/historial). La UI no necesita
+    // repintarse por cada bloque; agrupamos todos los avisos en un solo refresco.
+    private final Handler refreshHandler = new Handler(Looper.getMainLooper());
+    private final Runnable refreshBroadcastRunnable = () -> {
+        try {
+            sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+        } catch (Throwable ignored) {}
+    };
 
     @Override public void onCreate() {
         super.onCreate();
@@ -404,15 +425,21 @@ public class FirebaseListenerService extends Service {
         durableStateRef = FirebaseDatabase.getInstance().getReference("state/current");
         durableStateListener = new ValueEventListener() {
             @Override public void onDataChange(DataSnapshot snapshot) {
-                try {
-                    Object raw = snapshot.getValue();
-                    if (!(raw instanceof Map)) return;
-                    JSONObject root = new JSONObject((Map<String, Object>) raw);
-                    JSONObject sales = root.optJSONObject("sales");
-                    if (sales == null) return;
-                    StateStore.applyDurableSnapshot(FirebaseListenerService.this, sales, root.optInt("total", sales.length()));
-                    broadcastRefresh();
-                } catch (Throwable ignored) {}
+                final Object raw = snapshot.getValue();
+                if (!(raw instanceof Map)) return;
+
+                // Firebase invoca este callback en el hilo principal. Antes se
+                // reconstruía aquí mismo todo el tablero/historial y podía causar ANR.
+                dataExecutor.execute(() -> {
+                    try {
+                        JSONObject root = new JSONObject((Map<String, Object>) raw);
+                        JSONObject sales = root.optJSONObject("sales");
+                        if (sales == null) return;
+                        StateStore.applyDurableSnapshot(FirebaseListenerService.this,
+                                sales, root.optInt("total", sales.length()));
+                        broadcastRefresh();
+                    } catch (Throwable ignored) {}
+                });
             }
             @Override public void onCancelled(DatabaseError error) {
                 // El stream principal sigue funcionando aunque falle la copia durable.
@@ -459,16 +486,27 @@ public class FirebaseListenerService extends Service {
 
         ChildEventListener listener = new ChildEventListener() {
             @Override public void onChildAdded(DataSnapshot snapshot, String previousChildName) {
-                String key = snapshot.getKey();
+                final String key = snapshot.getKey();
                 if (key == null || key.trim().isEmpty()) return;
                 String saved = prefs().getString(cursorKey, "");
                 if (key.equals(saved)) return;
-                JSONObject msg = snapshotToJson(snapshot);
-                if (msg != null) {
-                    if (main) handleMessage(msg);
-                    else if (ReadSync.isReadSync(msg)) handleReadSync(msg);
+                final JSONObject msg = snapshotToJson(snapshot);
+                if (msg == null) {
+                    prefs().edit().putString(cursorKey, key).apply();
+                    return;
                 }
-                prefs().edit().putString(cursorKey, key).apply();
+
+                // Los listeners RTDB llegan por el hilo principal. Procesamos
+                // historial/estados/ventas en una cola de fondo y avanzamos el
+                // cursor sólo después de procesar el evento.
+                dataExecutor.execute(() -> {
+                    try {
+                        if (main) handleMessage(msg);
+                        else if (ReadSync.isReadSync(msg)) handleReadSync(msg);
+                    } finally {
+                        prefs().edit().putString(cursorKey, key).apply();
+                    }
+                });
             }
             @Override public void onChildChanged(DataSnapshot snapshot, String previousChildName) {}
             @Override public void onChildRemoved(DataSnapshot snapshot) {}
@@ -694,7 +732,11 @@ public class FirebaseListenerService extends Service {
     }
 
     private void broadcastRefresh() {
-        sendBroadcast(new Intent("com.mlcentral.ventas.SALE_RECEIVED").setPackage(getPackageName()));
+        // Una restauración puede traer cientos/miles de eventos. Antes cada uno
+        // forzaba un refresh completo de Inicio. Ahora sólo queda un refresco
+        // pendiente y se ejecuta cuando la ráfaga se calma.
+        refreshHandler.removeCallbacks(refreshBroadcastRunnable);
+        refreshHandler.postDelayed(refreshBroadcastRunnable, 700L);
     }
 
     private void cancelSaleNotifications(List<String> ids) {
@@ -815,6 +857,8 @@ public class FirebaseListenerService extends Service {
         try { if (rsQuery != null && rsListener != null) rsQuery.removeEventListener(rsListener); } catch (Exception ignored) {}
         try { if (connectedRef != null && connectedListener != null) connectedRef.removeEventListener(connectedListener); } catch (Exception ignored) {}
         try { if (durableStateRef != null && durableStateListener != null) durableStateRef.removeEventListener(durableStateListener); } catch (Exception ignored) {}
+        try { refreshHandler.removeCallbacks(refreshBroadcastRunnable); } catch (Throwable ignored) {}
+        try { dataExecutor.shutdownNow(); } catch (Throwable ignored) {}
         super.onDestroy();
     }
 
