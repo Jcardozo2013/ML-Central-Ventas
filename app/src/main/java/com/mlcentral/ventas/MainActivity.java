@@ -29,6 +29,9 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends Activity {
     private TextView status;
@@ -64,6 +67,14 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private boolean loginDialogShowing = false;
     private boolean syncStarted = false;
+
+    private final ExecutorService dashboardExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "MLCentralDashboard");
+        t.setDaemon(true);
+        return t;
+    });
+    private final AtomicBoolean dashboardRefreshRunning = new AtomicBoolean(false);
+    private final AtomicBoolean dashboardRefreshPending = new AtomicBoolean(false);
 
     private final Runnable initialRefresh = new Runnable() {
         @Override public void run() {
@@ -499,12 +510,6 @@ public class MainActivity extends Activity {
         return "monthly_profit_goal_cents_" + year + "_" + month;
     }
 
-    private String formatPesos(double value) {
-        String s = String.format(Locale.US, "%,.2f", value)
-                .replace(",", "X").replace(".", ",").replace("X", ".");
-        return s + " pesos";
-    }
-
     private void showMonthlyGoalDialog() {
         Calendar c = Calendar.getInstance();
         final int year = c.get(Calendar.YEAR);
@@ -568,9 +573,9 @@ public class MainActivity extends Activity {
         double goal = goalCents / 100.0;
         double pct = goal > 0.0 ? (currentProfit / goal) * 100.0 : 0.0;
         String pctText = String.format(Locale.getDefault(), "%.1f%%", pct);
-        monthlyGoalValue.setText(formatPesos(goal) + " · " + pctText);
-        monthlyGoalProgress.setText("Llevás " + formatPesos(currentProfit)
-                + " de " + formatPesos(goal) + " este mes.");
+        monthlyGoalValue.setText(SaleStore.formatMoney(goal) + " · " + pctText);
+        monthlyGoalProgress.setText("Llevás " + SaleStore.formatMoney(currentProfit)
+                + " de " + SaleStore.formatMoney(goal) + " este mes.");
         boolean reached = pct >= 100.0;
         monthlyGoalValue.setTextColor(reached ? UiKit.GREEN : UiKit.ACCENT);
         monthlyGoalProgress.setTextColor(reached ? UiKit.GREEN : UiKit.MUTED);
@@ -627,38 +632,127 @@ public class MainActivity extends Activity {
         return n == 1 ? "\n1 pendiente" : "\n" + n + " pendientes";
     }
 
+    private static final class DashboardSnapshot {
+        int unread;
+        boolean signed;
+        boolean connected;
+        long connectedAt;
+        String mode;
+        String historyStatus;
+        String stateText;
+        int pendingStateChanges;
+        long heartbeat;
+        String firebaseSummary;
+        String firebaseDetail;
+        String firebaseCleanup;
+        int firebaseLevel;
+        boolean firebaseStale;
+        StateStore.Summary stateSummary;
+        MonthlyStats.Stats monthly;
+        MonthPaceStats.Pace pace;
+        String todayHistory;
+    }
+
+    private DashboardSnapshot collectDashboardSnapshot() {
+        DashboardSnapshot d = new DashboardSnapshot();
+
+        // Todo lo que puede crecer con los días (historial, estados, ritmo)
+        // se calcula fuera del hilo principal.
+        d.unread = SaleStore.unread(this);
+        d.signed = FirebaseTransport.signedIn(this);
+        d.connected = SaleStore.connected(this);
+        d.connectedAt = SaleStore.connectedAt(this);
+
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        d.mode = p.getString("connection_mode", "");
+        d.historyStatus = HistoryRestore.statusText(this);
+        d.stateText = StateStore.statusText(this);
+        d.pendingStateChanges = StateSync.pendingCount(this);
+        d.heartbeat = p.getLong("background_heartbeat_v153", 0L);
+
+        d.firebaseSummary = FirebaseUsageMonitor.summary(this);
+        d.firebaseLevel = FirebaseUsageMonitor.level(this);
+        d.firebaseStale = FirebaseUsageMonitor.stale(this);
+        d.firebaseDetail = FirebaseUsageMonitor.detail(this);
+        d.firebaseCleanup = FirebaseUsageMonitor.cleanupText(this);
+
+        if (StateStore.lastSyncAt(this) > 0L) {
+            // Una sola lectura del tablero sirve para todos los contadores.
+            d.stateSummary = StateStore.summary(this);
+        } else {
+            // Respaldo sólo para una instalación que todavía no recibió Estados.
+            StateStore.Summary fallback = new StateStore.Summary();
+            fallback.todaySales = SaleStore.todaySaleCount(this);
+            fallback.todayProfit = SaleStore.todayProfit(this);
+            fallback.todayPendingProfit = SaleStore.todayPendingProfitCount(this);
+            fallback.monthProfit = SaleStore.monthProfit(this);
+            fallback.monthPendingProfit = SaleStore.monthPendingProfitCount(this);
+            d.stateSummary = fallback;
+        }
+
+        Calendar nowMonth = Calendar.getInstance();
+        d.monthly = MonthlyStats.get(this,
+                nowMonth.get(Calendar.YEAR), nowMonth.get(Calendar.MONTH));
+        d.pace = MonthPaceStats.calculate(this);
+        d.todayHistory = SaleStore.todayHistoryText(this);
+        return d;
+    }
+
     private void refresh() {
-        int n = SaleStore.unread(this);
+        dashboardRefreshPending.set(true);
+        if (!dashboardRefreshRunning.compareAndSet(false, true)) return;
+        dashboardExecutor.execute(this::drainDashboardRefresh);
+    }
+
+    private void drainDashboardRefresh() {
+        try {
+            while (dashboardRefreshPending.getAndSet(false)) {
+                final DashboardSnapshot snapshot = collectDashboardSnapshot();
+                runOnUiThread(() -> {
+                    if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+                    applyDashboardSnapshot(snapshot);
+                });
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            dashboardRefreshRunning.set(false);
+            if (dashboardRefreshPending.get()
+                    && dashboardRefreshRunning.compareAndSet(false, true)) {
+                dashboardExecutor.execute(this::drainDashboardRefresh);
+            }
+        }
+    }
+
+    private void applyDashboardSnapshot(DashboardSnapshot d) {
+        int n = d.unread;
         unread.setText(n == 1 ? "1 venta nueva · VER" : n + " ventas nuevas" + (n > 0 ? " · VER" : ""));
         unread.setEnabled(n > 0);
         unread.setTextColor(n > 0 ? Color.WHITE : UiKit.MUTED);
-        unread.setBackground(n > 0 ? UiKit.rounded(UiKit.ACCENT, 14, this) : UiKit.roundedStroke(Color.WHITE, 14, UiKit.BORDER, this));
+        unread.setBackground(n > 0 ? UiKit.rounded(UiKit.ACCENT, 14, this)
+                : UiKit.roundedStroke(Color.WHITE, 14, UiKit.BORDER, this));
 
-        boolean signed = FirebaseTransport.signedIn(this);
-        boolean c = SaleStore.connected(this);
-        long at = SaleStore.connectedAt(this);
-        String time = at > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at)) : "";
-        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
-        String mode = p.getString("connection_mode", "");
-        if (!signed) {
+        String time = d.connectedAt > 0
+                ? new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(d.connectedAt))
+                : "";
+        if (!d.signed) {
             status.setText("● Falta iniciar sesión en Firebase");
             status.setTextColor(UiKit.ORANGE);
             modeBadge.setText("LOGIN");
             modeBadge.setTextColor(UiKit.ORANGE);
             modeBadge.setBackground(UiKit.rounded(UiKit.ORANGE_SOFT, 99, this));
-        } else if (c && "firebase".equals(mode)) {
+        } else if (d.connected && "firebase".equals(d.mode)) {
             status.setText("● Firebase conectado · " + time);
             status.setTextColor(UiKit.GREEN);
             modeBadge.setText("FIREBASE");
             modeBadge.setTextColor(UiKit.GREEN);
             modeBadge.setBackground(UiKit.rounded(UiKit.GREEN_SOFT, 99, this));
-        } else if (c && "firebase-rest".equals(mode)) {
+        } else if (d.connected && "firebase-rest".equals(d.mode)) {
             status.setText("● Conectado por respaldo · " + time);
             status.setTextColor(UiKit.GREEN);
             modeBadge.setText("RESPALDO");
             modeBadge.setTextColor(UiKit.GREEN);
             modeBadge.setBackground(UiKit.rounded(UiKit.GREEN_SOFT, 99, this));
-        } else if (c) {
+        } else if (d.connected) {
             status.setText("● Conectado · " + time);
             status.setTextColor(UiKit.GREEN);
             modeBadge.setText("EN VIVO");
@@ -672,116 +766,129 @@ public class MainActivity extends Activity {
             modeBadge.setBackground(UiKit.rounded(UiKit.ORANGE_SOFT, 99, this));
         }
 
-        historyStatus.setText(HistoryRestore.statusText(this));
-        String stateText = StateStore.statusText(this);
-        int pending = StateSync.pendingCount(this);
-        if (pending > 0) stateText += " · " + pending + (pending == 1 ? " cambio pendiente" : " cambios pendientes");
-        stateStatus.setText(stateText);
+        historyStatus.setText(d.historyStatus);
+        String stateTextValue = d.stateText;
+        if (d.pendingStateChanges > 0) {
+            stateTextValue += " · " + d.pendingStateChanges
+                    + (d.pendingStateChanges == 1 ? " cambio pendiente" : " cambios pendientes");
+        }
+        stateStatus.setText(stateTextValue);
 
-        long heartbeat = p.getLong("background_heartbeat_v153", 0L);
-        long age = heartbeat <= 0L ? Long.MAX_VALUE : Math.max(0L, System.currentTimeMillis() - heartbeat);
+        long age = d.heartbeat <= 0L
+                ? Long.MAX_VALUE
+                : Math.max(0L, System.currentTimeMillis() - d.heartbeat);
         if (age < 45000L) {
-            backgroundStatus.setText("● Segundo plano ACTIVO · pulso hace " + Math.max(0L, age / 1000L) + " s");
+            backgroundStatus.setText("● Segundo plano ACTIVO · pulso hace "
+                    + Math.max(0L, age / 1000L) + " s");
             backgroundStatus.setTextColor(UiKit.GREEN);
         } else {
-            String ago = heartbeat <= 0L ? "sin pulso" : "hace " + Math.max(1L, age / 60000L) + " min";
+            String ago = d.heartbeat <= 0L ? "sin pulso"
+                    : "hace " + Math.max(1L, age / 60000L) + " min";
             backgroundStatus.setText("● Segundo plano DETENIDO/ATRASADO · " + ago);
             backgroundStatus.setTextColor(UiKit.ORANGE);
         }
 
-        firebaseUsageStatus.setText(FirebaseUsageMonitor.summary(this));
-        int usageLevel = FirebaseUsageMonitor.level(this);
+        firebaseUsageStatus.setText(d.firebaseSummary);
         firebaseUsageStatus.setTextColor(
-                FirebaseUsageMonitor.stale(this) ? UiKit.ORANGE
-                        : (usageLevel >= 2 ? Color.rgb(185, 28, 28) : (usageLevel == 1 ? UiKit.ORANGE : UiKit.GREEN)));
-        firebaseUsageDetail.setText(FirebaseUsageMonitor.detail(this));
-        firebaseUsageCleanup.setText(FirebaseUsageMonitor.cleanupText(this));
+                d.firebaseStale ? UiKit.ORANGE
+                        : (d.firebaseLevel >= 2 ? Color.rgb(185, 28, 28)
+                        : (d.firebaseLevel == 1 ? UiKit.ORANGE : UiKit.GREEN)));
+        firebaseUsageDetail.setText(d.firebaseDetail);
+        firebaseUsageCleanup.setText(d.firebaseCleanup);
 
-        todaySales.setText(String.valueOf(SaleStore.todaySaleCount(this)));
-        todayProfit.setText(SaleStore.formatMoney(SaleStore.todayProfit(this)) + pendingSuffix(SaleStore.todayPendingProfitCount(this)));
+        StateStore.Summary summary = d.stateSummary == null
+                ? new StateStore.Summary() : d.stateSummary;
+        todaySales.setText(String.valueOf(summary.todaySales));
+        todayProfit.setText(SaleStore.formatMoney(summary.todayProfit)
+                + pendingSuffix(summary.todayPendingProfit));
 
-        Calendar nowMonth = Calendar.getInstance();
-        MonthlyStats.Stats monthly = MonthlyStats.get(this, nowMonth.get(Calendar.YEAR), nowMonth.get(Calendar.MONTH));
-        monthSold.setText(SaleStore.formatMoney(monthly.soldTotal)
-                + (monthly.missingSaleAmount > 0 ? "\n" + monthly.missingSaleAmount + " sin importe" : ""));
-        double currentMonthProfit = SaleStore.monthProfit(this);
-        monthProfit.setText(SaleStore.formatMoney(currentMonthProfit) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
+        MonthlyStats.Stats monthly = d.monthly;
+        if (monthly != null) {
+            monthSold.setText(SaleStore.formatMoney(monthly.soldTotal)
+                    + (monthly.missingSaleAmount > 0
+                    ? "\n" + monthly.missingSaleAmount + " sin importe" : ""));
+        }
+        double currentMonthProfit = summary.monthProfit;
+        monthProfit.setText(SaleStore.formatMoney(currentMonthProfit)
+                + pendingSuffix(summary.monthPendingProfit));
         refreshMonthlyGoal(currentMonthProfit);
 
-        MonthPaceStats.Pace pace = MonthPaceStats.calculate(this);
-        paceTitle.setText("RITMO DEL MES · HASTA EL DÍA " + pace.compareDay);
-        paceCurrentPeriod.setText(shortMonthLabel(pace.currentYear, pace.currentMonth));
-        pacePreviousPeriod.setText(shortMonthLabel(pace.previousYear, pace.previousMonth));
-        paceCurrentSales.setText(salesLabel(pace.currentSales));
-        pacePreviousSales.setText(salesLabel(pace.previousSales));
-        paceCurrentProfit.setText(SaleStore.formatMoney(pace.currentProfit) + " ganancia");
-        pacePreviousProfit.setText(SaleStore.formatMoney(pace.previousProfit) + " ganancia");
+        MonthPaceStats.Pace pace = d.pace;
+        if (pace != null) {
+            paceTitle.setText("RITMO DEL MES · HASTA EL DÍA " + pace.compareDay);
+            paceCurrentPeriod.setText(shortMonthLabel(pace.currentYear, pace.currentMonth));
+            pacePreviousPeriod.setText(shortMonthLabel(pace.previousYear, pace.previousMonth));
+            paceCurrentSales.setText(salesLabel(pace.currentSales));
+            pacePreviousSales.setText(salesLabel(pace.previousSales));
+            paceCurrentProfit.setText(SaleStore.formatMoney(pace.currentProfit) + " ganancia");
+            pacePreviousProfit.setText(SaleStore.formatMoney(pace.previousProfit) + " ganancia");
 
-        if (pace.previousSales > 0) {
-            double salesPct = ((pace.currentSales - pace.previousSales) * 100.0) / pace.previousSales;
-            String salesPctText = String.format(Locale.getDefault(), "%.1f%%", Math.abs(salesPct));
-            if (salesPct > 0.05) {
-                paceSalesResult.setText("↑ Vas " + salesPctText + " mejor en ventas");
+            if (pace.previousSales > 0) {
+                double salesPct = ((pace.currentSales - pace.previousSales) * 100.0) / pace.previousSales;
+                String salesPctText = String.format(Locale.getDefault(), "%.1f%%", Math.abs(salesPct));
+                if (salesPct > 0.05) {
+                    paceSalesResult.setText("↑ Vas " + salesPctText + " mejor en ventas");
+                    paceSalesResult.setTextColor(UiKit.GREEN);
+                } else if (salesPct < -0.05) {
+                    paceSalesResult.setText("↓ Vas " + salesPctText + " peor en ventas");
+                    paceSalesResult.setTextColor(UiKit.RED);
+                } else {
+                    paceSalesResult.setText("≈ Vas prácticamente igual en ventas · " + salesPctText);
+                    paceSalesResult.setTextColor(UiKit.MUTED);
+                }
+            } else if (pace.currentSales > 0) {
+                paceSalesResult.setText("↑ Más ventas, pero sin % comparable");
                 paceSalesResult.setTextColor(UiKit.GREEN);
-            } else if (salesPct < -0.05) {
-                paceSalesResult.setText("↓ Vas " + salesPctText + " peor en ventas");
-                paceSalesResult.setTextColor(UiKit.RED);
             } else {
-                paceSalesResult.setText("≈ Vas prácticamente igual en ventas · " + salesPctText);
+                paceSalesResult.setText("Sin ventas comparables todavía");
                 paceSalesResult.setTextColor(UiKit.MUTED);
             }
-        } else if (pace.currentSales > 0) {
-            paceSalesResult.setText("↑ Más ventas, pero sin % comparable");
-            paceSalesResult.setTextColor(UiKit.GREEN);
-        } else {
-            paceSalesResult.setText("Sin ventas comparables todavía");
-            paceSalesResult.setTextColor(UiKit.MUTED);
+
+            if (!pace.complete()) {
+                paceResult.setText("⚠ Comparación parcial");
+                paceResult.setTextColor(UiKit.ORANGE);
+                int missing = pace.currentMissingProfit + pace.previousMissingProfit;
+                paceNote.setText("Hay " + missing + (missing == 1
+                        ? " venta sin ganancia confirmada. No muestro un % engañoso."
+                        : " ventas sin ganancia confirmada. No muestro un % engañoso."));
+                paceNote.setTextColor(UiKit.ORANGE);
+            } else if (!pace.comparable) {
+                if (pace.currentProfit > pace.previousProfit && pace.currentProfit > 0.0) {
+                    paceResult.setText("↑ Vas mejor, pero sin % comparable");
+                    paceResult.setTextColor(UiKit.GREEN);
+                } else if (pace.currentProfit < pace.previousProfit) {
+                    paceResult.setText("↓ Vas por debajo, pero sin % comparable");
+                    paceResult.setTextColor(UiKit.RED);
+                } else {
+                    paceResult.setText("Sin variación comparable");
+                    paceResult.setTextColor(UiKit.MUTED);
+                }
+                paceNote.setText("El mes anterior no tiene una ganancia positiva para calcular un porcentaje válido.");
+                paceNote.setTextColor(UiKit.MUTED);
+            } else {
+                double pct = pace.percentChange;
+                String pctText = String.format(Locale.getDefault(), "%.1f%%", Math.abs(pct));
+                if (pct > 0.05) {
+                    paceResult.setText("↑ Vas " + pctText + " mejor en ganancia");
+                    paceResult.setTextColor(UiKit.GREEN);
+                } else if (pct < -0.05) {
+                    paceResult.setText("↓ Vas " + pctText + " peor en ganancia");
+                    paceResult.setTextColor(UiKit.RED);
+                } else {
+                    paceResult.setText("≈ Vas prácticamente igual · " + pctText);
+                    paceResult.setTextColor(UiKit.MUTED);
+                }
+                paceNote.setText("Compara días 1–" + pace.compareDay
+                        + " · porcentaje calculado únicamente sobre la ganancia.");
+                paceNote.setTextColor(UiKit.MUTED);
+            }
         }
 
-        if (!pace.complete()) {
-            paceResult.setText("⚠ Comparación parcial");
-            paceResult.setTextColor(UiKit.ORANGE);
-            int missing = pace.currentMissingProfit + pace.previousMissingProfit;
-            paceNote.setText("Hay " + missing + (missing == 1
-                    ? " venta sin ganancia confirmada. No muestro un % engañoso."
-                    : " ventas sin ganancia confirmada. No muestro un % engañoso."));
-            paceNote.setTextColor(UiKit.ORANGE);
-        } else if (!pace.comparable) {
-            if (pace.currentProfit > pace.previousProfit && pace.currentProfit > 0.0) {
-                paceResult.setText("↑ Vas mejor, pero sin % comparable");
-                paceResult.setTextColor(UiKit.GREEN);
-            } else if (pace.currentProfit < pace.previousProfit) {
-                paceResult.setText("↓ Vas por debajo, pero sin % comparable");
-                paceResult.setTextColor(UiKit.RED);
-            } else {
-                paceResult.setText("Sin variación comparable");
-                paceResult.setTextColor(UiKit.MUTED);
-            }
-            paceNote.setText("El mes anterior no tiene una ganancia positiva para calcular un porcentaje válido.");
-            paceNote.setTextColor(UiKit.MUTED);
-        } else {
-            double pct = pace.percentChange;
-            String pctText = String.format(Locale.getDefault(), "%.1f%%", Math.abs(pct));
-            if (pct > 0.05) {
-                paceResult.setText("↑ Vas " + pctText + " mejor en ganancia");
-                paceResult.setTextColor(UiKit.GREEN);
-            } else if (pct < -0.05) {
-                paceResult.setText("↓ Vas " + pctText + " peor en ganancia");
-                paceResult.setTextColor(UiKit.RED);
-            } else {
-                paceResult.setText("≈ Vas prácticamente igual · " + pctText);
-                paceResult.setTextColor(UiKit.MUTED);
-            }
-            paceNote.setText("Compara días 1–" + pace.compareDay
-                    + " · porcentaje calculado únicamente sobre la ganancia.");
-            paceNote.setTextColor(UiKit.MUTED);
-        }
-
-        pendingBuy.setText(String.valueOf(StateStore.countStage(this, "purchase_pending")));
-        inTransit.setText(String.valueOf(StateStore.countStage(this, "receive_pending")));
-        pendingRocha.setText(String.valueOf(StateStore.countStage(this, "pending_rocha")));
-        delivered.setText(String.valueOf(StateStore.countStage(this, "delivered")));
-        todayHistory.setText(SaleStore.todayHistoryText(this));
+        pendingBuy.setText(String.valueOf(summary.purchasePending));
+        inTransit.setText(String.valueOf(summary.receivePending));
+        pendingRocha.setText(String.valueOf(summary.pendingRocha));
+        delivered.setText(String.valueOf(summary.delivered));
+        todayHistory.setText(d.todayHistory == null ? "" : d.todayHistory);
     }
 
     @Override protected void onStart() {
@@ -812,5 +919,12 @@ public class MainActivity extends Activity {
         }
         handler.removeCallbacks(initialRefresh);
         handler.postDelayed(initialRefresh, 280L);
+    }
+
+    @Override protected void onDestroy() {
+        handler.removeCallbacks(historyRetry);
+        handler.removeCallbacks(initialRefresh);
+        try { dashboardExecutor.shutdownNow(); } catch (Throwable ignored) {}
+        super.onDestroy();
     }
 }
