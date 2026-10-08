@@ -31,6 +31,10 @@ public final class StateStore {
         public double monthProfit;
         public int todayPendingProfit;
         public int monthPendingProfit;
+        public int purchasePending;
+        public int receivePending;
+        public int pendingRocha;
+        public int delivered;
     }
 
     private static SharedPreferences prefs(Context c) {
@@ -225,6 +229,12 @@ public final class StateStore {
             JSONObject row = all.optJSONObject(names.optString(i));
             if (row == null) continue;
             out.validSales++;
+
+            String stage = row.optString("stage", "");
+            if ("purchase_pending".equals(stage)) out.purchasePending++;
+            else if ("receive_pending".equals(stage)) out.receivePending++;
+            else if ("pending_rocha".equals(stage)) out.pendingRocha++;
+            else if ("delivered".equals(stage)) out.delivered++;
 
             long saleUnix = row.optLong("sale_unix", 0L);
             boolean today = isToday(saleUnix);
