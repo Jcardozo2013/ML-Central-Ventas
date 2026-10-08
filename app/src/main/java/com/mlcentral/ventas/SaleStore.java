@@ -248,7 +248,41 @@ public final class SaleStore {
         return formatHistory(c, false, true);
     }
 
+    /**
+     * Solo para la tarjeta "Ventas de hoy" de Inicio.
+     * Las canceladas siguen en Historial como registro; no se suman ni
+     * aparecen como ventas válidas en Inicio.
+     * null = aún no hay snapshot autoritativo, conservar el modo anterior.
+     */
+    public static synchronized String todayHistoryText(Context c, Set<String> validOrderIds) {
+        return formatHistory(c, false, true, validOrderIds);
+    }
+
+    private static boolean belongsToValidOrder(JSONObject row, Set<String> validOrderIds) {
+        if (validOrderIds == null) return true;
+        String id = row.optString("saleId", "").trim();
+        if (validOrderIds.contains(id)) return true;
+
+        // Algunos mensajes tienen identificador de notificación distinto del
+        // order_id de Estados. El campo "Orden:" permite reconciliarlos.
+        String message = row.optString("message", "");
+        for (String line : message.split("\\r?\\n")) {
+            String text = line.trim();
+            if (!text.toLowerCase(Locale.ROOT).startsWith("orden:")) continue;
+            String candidate = text.substring("orden:".length()).trim();
+            int whitespace = candidate.indexOf(' ');
+            if (whitespace >= 0) candidate = candidate.substring(0, whitespace);
+            return validOrderIds.contains(candidate.trim());
+        }
+        return false;
+    }
+
     private static String formatHistory(Context c, boolean unreadOnly, boolean todayOnly) {
+        return formatHistory(c, unreadOnly, todayOnly, null);
+    }
+
+    private static String formatHistory(Context c, boolean unreadOnly, boolean todayOnly,
+                                        Set<String> validOrderIds) {
         StringBuilder sb = new StringBuilder();
         try {
             JSONArray arr = new JSONArray(prefs(c).getString("history", "[]"));
@@ -260,6 +294,7 @@ public final class SaleStore {
                 if (unreadOnly && read) continue;
                 long seconds = o.optLong("time", 0L);
                 if (todayOnly && !isToday(seconds)) continue;
+                if (todayOnly && !belongsToValidOrder(o, validOrderIds)) continue;
                 long t = seconds * 1000L;
                 String when = t > 0 ? (todayOnly ? fmt.format(new Date(t)) : new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(new Date(t))) : "";
                 if (sb.length() > 0) sb.append("\n\n────────────────────────\n\n");
@@ -272,7 +307,9 @@ public final class SaleStore {
         }
         if (sb.length() == 0) {
             if (unreadOnly) return "No hay ventas nuevas para confirmar.";
-            if (todayOnly) return "Todavía no hay ventas recibidas hoy.";
+            if (todayOnly) return validOrderIds == null
+                    ? "Todavía no hay ventas recibidas hoy."
+                    : "Todavía no hay ventas válidas para mostrar hoy.";
             return "Todavía no hay ventas recibidas en este celular.";
         }
         return sb.toString();
