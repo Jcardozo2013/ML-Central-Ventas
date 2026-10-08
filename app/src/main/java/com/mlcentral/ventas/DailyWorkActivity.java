@@ -87,7 +87,7 @@ public final class DailyWorkActivity extends Activity {
         Button states = UiKit.button(this, "Ver todos los estados");
         states.setOnClickListener(v -> startActivity(new Intent(this, StatusActivity.class)));
         root.addView(states, UiKit.fullWidth(this, 11, 0));
-        shell.addView(UiKit.bottomNav(this, 0),
+        shell.addView(UiKit.bottomNav(this, -1),
                 new LinearLayout.LayoutParams(-1, -2));
         setContentView(shell);
     }
