@@ -694,7 +694,11 @@ public class MainActivity extends Activity {
         d.monthly = MonthlyStats.get(this,
                 nowMonth.get(Calendar.YEAR), nowMonth.get(Calendar.MONTH));
         d.pace = MonthPaceStats.calculate(this);
-        d.todayHistory = SaleStore.todayHistoryText(this);
+        // El contador y la lista del Inicio comparten la misma fuente válida.
+        // No filtrar el Historial completo: ahí se conservan las canceladas.
+        d.todayHistory = StateStore.lastSyncAt(this) > 0L
+                ? SaleStore.todayHistoryText(this, d.stateSummary.todayValidOrderIds)
+                : SaleStore.todayHistoryText(this);
         return d;
     }
 
