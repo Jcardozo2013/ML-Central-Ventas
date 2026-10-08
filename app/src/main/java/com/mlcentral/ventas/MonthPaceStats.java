@@ -83,35 +83,66 @@ public final class MonthPaceStats {
         double previousProfit = 0.0;
 
         try {
-            JSONArray history = new JSONArray(prefs(context).getString("history", "[]"));
-            for (int i = 0; i < history.length(); i++) {
-                JSONObject row = history.optJSONObject(i);
-                if (row == null) continue;
+            if (StateStore.lastSyncAt(context) > 0L) {
+                // Windows es la fuente autoritativa para ambos meses: si una
+                // venta se canceló (este mes o el anterior) ya no está aquí.
+                // Nunca calcular Ritmo a partir de notificaciones históricas.
+                JSONObject valid = StateStore.snapshotSales(context);
+                JSONArray ids = valid.names();
+                if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                    JSONObject row = valid.optJSONObject(ids.optString(i));
+                    if (row == null) continue;
+                    long seconds = row.optLong("sale_unix", 0L);
+                    if (seconds <= 0L) continue;
+                    Calendar saleDate = Calendar.getInstance();
+                    saleDate.setTimeInMillis(seconds * 1000L);
+                    if (saleDate.get(Calendar.DAY_OF_MONTH) > compareDay) continue;
+                    boolean inCurrent = saleDate.get(Calendar.YEAR) == currentYear
+                            && saleDate.get(Calendar.MONTH) == currentMonth;
+                    boolean inPrevious = saleDate.get(Calendar.YEAR) == previousYear
+                            && saleDate.get(Calendar.MONTH) == previousMonth;
+                    if (!inCurrent && !inPrevious) continue;
 
-                long seconds = row.optLong("time", 0L);
-                if (seconds <= 0L) continue;
+                    boolean hasProfit = row.has("profit") && !row.isNull("profit");
+                    double profit = hasProfit ? row.optDouble("profit", 0.0) : 0.0;
+                    if (inCurrent) {
+                        currentSales++;
+                        if (!hasProfit) currentMissing++;
+                        else currentProfit += profit;
+                    } else {
+                        previousSales++;
+                        if (!hasProfit) previousMissing++;
+                        else previousProfit += profit;
+                    }
+                }
+            } else {
+                // Solo antes de recibir el primer tablero válido de Windows,
+                // conservar el respaldo histórico usado por versiones viejas.
+                JSONArray history = new JSONArray(prefs(context).getString("history", "[]"));
+                for (int i = 0; i < history.length(); i++) {
+                    JSONObject row = history.optJSONObject(i);
+                    if (row == null) continue;
+                    long seconds = row.optLong("time", 0L);
+                    if (seconds <= 0L) continue;
+                    Calendar saleDate = Calendar.getInstance();
+                    saleDate.setTimeInMillis(seconds * 1000L);
+                    if (saleDate.get(Calendar.DAY_OF_MONTH) > compareDay) continue;
+                    boolean inCurrent = saleDate.get(Calendar.YEAR) == currentYear
+                            && saleDate.get(Calendar.MONTH) == currentMonth;
+                    boolean inPrevious = saleDate.get(Calendar.YEAR) == previousYear
+                            && saleDate.get(Calendar.MONTH) == previousMonth;
+                    if (!inCurrent && !inPrevious) continue;
 
-                Calendar saleDate = Calendar.getInstance();
-                saleDate.setTimeInMillis(seconds * 1000L);
-                int day = saleDate.get(Calendar.DAY_OF_MONTH);
-                if (day > compareDay) continue;
-
-                boolean inCurrent = saleDate.get(Calendar.YEAR) == currentYear
-                        && saleDate.get(Calendar.MONTH) == currentMonth;
-                boolean inPrevious = saleDate.get(Calendar.YEAR) == previousYear
-                        && saleDate.get(Calendar.MONTH) == previousMonth;
-
-                if (!inCurrent && !inPrevious) continue;
-
-                Double profit = moneyFromLine(row.optString("message", ""), "Ganancia:");
-                if (inCurrent) {
-                    currentSales++;
-                    if (profit == null) currentMissing++;
-                    else currentProfit += profit;
-                } else {
-                    previousSales++;
-                    if (profit == null) previousMissing++;
-                    else previousProfit += profit;
+                    Double profit = moneyFromLine(row.optString("message", ""), "Ganancia:");
+                    if (inCurrent) {
+                        currentSales++;
+                        if (profit == null) currentMissing++;
+                        else currentProfit += profit;
+                    } else {
+                        previousSales++;
+                        if (profit == null) previousMissing++;
+                        else previousProfit += profit;
+                    }
                 }
             }
         } catch (Exception ignored) {}
