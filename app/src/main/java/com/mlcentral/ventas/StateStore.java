@@ -127,6 +127,9 @@ public final class StateStore {
         // llegó aquí pero faltó su mensaje de historial (caso STOCK LOCAL),
         // completamos únicamente ese registro faltante por order_id.
         HistoryRestore.backfillFromStateObject(c, sales);
+        // También las bajas por cancelación deben recalcular los totales:
+        // una cancelada ya no está en sales, aunque siga en historial.
+        MonthlyStats.rebuildFromStateObject(c, sales);
         return true;
     }
 
@@ -158,6 +161,7 @@ public final class StateStore {
                 .putLong(LAST_SYNC_KEY, now);
         if (activeChanged) e.putString(ACTIVE_KEY, active.toString());
         e.apply();
+        MonthlyStats.rebuildFromStateObject(c, all);
     }
 
     public static synchronized void applyDurableSnapshot(Context c, JSONObject sales, int total) {
@@ -173,6 +177,12 @@ public final class StateStore {
                 .putLong(LAST_STATUS_AT_KEY, now)
                 .apply();
         HistoryRestore.backfillFromStateObject(c, sales);
+        MonthlyStats.rebuildFromStateObject(c, sales);
+    }
+
+    /** Copia del tablero de ventas vigentes, sin ordenar para cálculos. */
+    public static synchronized JSONObject snapshotSales(Context c) {
+        return object(prefs(c).getString(FINAL_KEY, "{}"));
     }
 
     public static synchronized List<JSONObject> allSales(Context c) {
