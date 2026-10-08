@@ -51,8 +51,11 @@ public class MainActivity extends Activity {
     private TextView pacePreviousPeriod;
     private TextView pacePreviousSales;
     private TextView pacePreviousProfit;
+    private TextView paceSalesResult;
     private TextView paceResult;
     private TextView paceNote;
+    private TextView monthlyGoalValue;
+    private TextView monthlyGoalProgress;
     private TextView pendingBuy;
     private TextView inTransit;
     private TextView pendingRocha;
@@ -61,6 +64,12 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private boolean loginDialogShowing = false;
     private boolean syncStarted = false;
+
+    private final Runnable initialRefresh = new Runnable() {
+        @Override public void run() {
+            if (!isFinishing()) refresh();
+        }
+    };
 
     private final Runnable historyRetry = new Runnable() {
         @Override public void run() {
@@ -88,7 +97,8 @@ public class MainActivity extends Activity {
         buildUi();
         requestNotificationsIfNeeded();
         ensureFirebaseLogin();
-        refresh();
+        // La pantalla se dibuja primero. El refresco completo se agenda desde onResume
+        // para no bloquear los primeros toques al abrir la app.
     }
 
     private void migrateFirebaseProjectV165() {
@@ -383,8 +393,12 @@ public class MainActivity extends Activity {
         paceRow.addView(pacePreviousBox, pacePrevParams);
         paceCard.addView(paceRow);
 
-        paceResult = UiKit.text(this, "Calculando comparación…", 18, UiKit.TEXT, true);
-        paceResult.setPadding(0, UiKit.dp(this, 13), 0, 0);
+        paceSalesResult = UiKit.text(this, "Calculando ventas…", 16, UiKit.TEXT, true);
+        paceSalesResult.setPadding(0, UiKit.dp(this, 13), 0, 0);
+        paceCard.addView(paceSalesResult);
+
+        paceResult = UiKit.text(this, "Calculando ganancia…", 16, UiKit.TEXT, true);
+        paceResult.setPadding(0, UiKit.dp(this, 6), 0, 0);
         paceCard.addView(paceResult);
 
         paceNote = UiKit.text(this,
@@ -392,7 +406,20 @@ public class MainActivity extends Activity {
         paceNote.setPadding(0, UiKit.dp(this, 5), 0, 0);
         paceCard.addView(paceNote);
 
-        root.addView(paceCard, UiKit.fullWidth(this, 0, 18));
+        root.addView(paceCard, UiKit.fullWidth(this, 0, 12));
+
+        LinearLayout goalCard = UiKit.card(this);
+        TextView goalTitle = UiKit.text(this, "META MENSUAL DE GANANCIA", 12, UiKit.ACCENT, true);
+        goalTitle.setLetterSpacing(0.07f);
+        goalCard.addView(goalTitle);
+        monthlyGoalValue = UiKit.text(this, "Meta no configurada", 20, UiKit.TEXT, true);
+        monthlyGoalValue.setPadding(0, UiKit.dp(this, 8), 0, 0);
+        goalCard.addView(monthlyGoalValue);
+        monthlyGoalProgress = UiKit.text(this, "Tocá para definir la meta de este mes.", 13, UiKit.MUTED, false);
+        monthlyGoalProgress.setPadding(0, UiKit.dp(this, 5), 0, 0);
+        goalCard.addView(monthlyGoalProgress);
+        goalCard.setOnClickListener(v -> showMonthlyGoalDialog());
+        root.addView(goalCard, UiKit.fullWidth(this, 0, 18));
 
         LinearLayout opHeading = new LinearLayout(this);
         opHeading.setOrientation(LinearLayout.HORIZONTAL);
@@ -466,6 +493,81 @@ public class MainActivity extends Activity {
 
     private String salesLabel(int count) {
         return count + (count == 1 ? " venta" : " ventas");
+    }
+
+    private String monthlyGoalKey(int year, int month) {
+        return "monthly_profit_goal_cents_" + year + "_" + month;
+    }
+
+    private void showMonthlyGoalDialog() {
+        Calendar c = Calendar.getInstance();
+        final int year = c.get(Calendar.YEAR);
+        final int month = c.get(Calendar.MONTH);
+        final String key = monthlyGoalKey(year, month);
+        final SharedPreferences prefs = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        long currentCents = prefs.getLong(key, 0L);
+
+        final EditText input = new EditText(this);
+        input.setHint("Ej: 15000");
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        if (currentCents > 0L) {
+            input.setText(String.format(Locale.US, "%.2f", currentCents / 100.0));
+            input.setSelection(input.getText().length());
+        }
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("Meta de ganancia · " + shortMonthLabel(year, month))
+                .setMessage("Se usa únicamente para este mes. Al cambiar de mes empieza una meta nueva.")
+                .setView(input)
+                .setNeutralButton("Quitar meta", (d, w) -> {
+                    prefs.edit().remove(key).apply();
+                    refresh();
+                })
+                .setNegativeButton("Cancelar", null)
+                .setPositiveButton("Guardar", null)
+                .create();
+
+        dlg.setOnShowListener(x -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String raw = input.getText().toString().trim().replace(",", ".");
+            if (raw.isEmpty()) {
+                Toast.makeText(this, "Ingresá una meta", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            try {
+                double value = Double.parseDouble(raw);
+                if (value <= 0.0) throw new NumberFormatException();
+                prefs.edit().putLong(key, Math.round(value * 100.0)).apply();
+                dlg.dismiss();
+                refresh();
+            } catch (Exception e) {
+                Toast.makeText(this, "Ingresá un valor válido, por ejemplo 15000", Toast.LENGTH_SHORT).show();
+            }
+        }));
+        dlg.show();
+    }
+
+    private void refreshMonthlyGoal(double currentProfit) {
+        Calendar c = Calendar.getInstance();
+        long goalCents = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE)
+                .getLong(monthlyGoalKey(c.get(Calendar.YEAR), c.get(Calendar.MONTH)), 0L);
+        if (goalCents <= 0L) {
+            monthlyGoalValue.setText("Meta no configurada");
+            monthlyGoalValue.setTextColor(UiKit.TEXT);
+            monthlyGoalProgress.setText("Tocá para definir la meta de ganancia de este mes.");
+            monthlyGoalProgress.setTextColor(UiKit.MUTED);
+            return;
+        }
+
+        double goal = goalCents / 100.0;
+        double pct = goal > 0.0 ? (currentProfit / goal) * 100.0 : 0.0;
+        String pctText = String.format(Locale.getDefault(), "%.1f%%", pct);
+        monthlyGoalValue.setText(SaleStore.formatMoney(goal) + " · " + pctText);
+        monthlyGoalProgress.setText("Llevás " + SaleStore.formatMoney(currentProfit)
+                + " de " + SaleStore.formatMoney(goal) + " este mes.");
+        boolean reached = pct >= 100.0;
+        monthlyGoalValue.setTextColor(reached ? UiKit.GREEN : UiKit.ACCENT);
+        monthlyGoalProgress.setTextColor(reached ? UiKit.GREEN : UiKit.MUTED);
     }
 
     private LinearLayout metricCard(String label) {
@@ -596,7 +698,9 @@ public class MainActivity extends Activity {
         MonthlyStats.Stats monthly = MonthlyStats.get(this, nowMonth.get(Calendar.YEAR), nowMonth.get(Calendar.MONTH));
         monthSold.setText(SaleStore.formatMoney(monthly.soldTotal)
                 + (monthly.missingSaleAmount > 0 ? "\n" + monthly.missingSaleAmount + " sin importe" : ""));
-        monthProfit.setText(SaleStore.formatMoney(SaleStore.monthProfit(this)) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
+        double currentMonthProfit = SaleStore.monthProfit(this);
+        monthProfit.setText(SaleStore.formatMoney(currentMonthProfit) + pendingSuffix(SaleStore.monthPendingProfitCount(this)));
+        refreshMonthlyGoal(currentMonthProfit);
 
         MonthPaceStats.Pace pace = MonthPaceStats.calculate(this);
         paceTitle.setText("RITMO DEL MES · HASTA EL DÍA " + pace.compareDay);
@@ -606,6 +710,27 @@ public class MainActivity extends Activity {
         pacePreviousSales.setText(salesLabel(pace.previousSales));
         paceCurrentProfit.setText(SaleStore.formatMoney(pace.currentProfit) + " ganancia");
         pacePreviousProfit.setText(SaleStore.formatMoney(pace.previousProfit) + " ganancia");
+
+        if (pace.previousSales > 0) {
+            double salesPct = ((pace.currentSales - pace.previousSales) * 100.0) / pace.previousSales;
+            String salesPctText = String.format(Locale.getDefault(), "%.1f%%", Math.abs(salesPct));
+            if (salesPct > 0.05) {
+                paceSalesResult.setText("↑ Vas " + salesPctText + " mejor en ventas");
+                paceSalesResult.setTextColor(UiKit.GREEN);
+            } else if (salesPct < -0.05) {
+                paceSalesResult.setText("↓ Vas " + salesPctText + " peor en ventas");
+                paceSalesResult.setTextColor(UiKit.RED);
+            } else {
+                paceSalesResult.setText("≈ Vas prácticamente igual en ventas · " + salesPctText);
+                paceSalesResult.setTextColor(UiKit.MUTED);
+            }
+        } else if (pace.currentSales > 0) {
+            paceSalesResult.setText("↑ Más ventas, pero sin % comparable");
+            paceSalesResult.setTextColor(UiKit.GREEN);
+        } else {
+            paceSalesResult.setText("Sin ventas comparables todavía");
+            paceSalesResult.setTextColor(UiKit.MUTED);
+        }
 
         if (!pace.complete()) {
             paceResult.setText("⚠ Comparación parcial");
@@ -658,11 +783,14 @@ public class MainActivity extends Activity {
         IntentFilter f = new IntentFilter("com.mlcentral.ventas.SALE_RECEIVED");
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(saleReceiver, f, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(saleReceiver, f);
         handler.removeCallbacks(historyRetry);
-        handler.post(historyRetry);
+        // startAfterLogin ya hace la sincronización inicial. Evitamos repetir
+        // historia/estados apenas abre y dejamos el mantenimiento para después.
+        handler.postDelayed(historyRetry, 120000L);
     }
 
     @Override protected void onStop() {
         handler.removeCallbacks(historyRetry);
+        handler.removeCallbacks(initialRefresh);
         try { unregisterReceiver(saleReceiver); } catch (Exception ignored) {}
         super.onStop();
     }
@@ -670,14 +798,13 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (FirebaseTransport.signedIn(this)) {
+            // startAfterLogin ya controla la sincronización inicial y evita
+            // repetir historia/estados varias veces durante el arranque.
             startAfterLogin();
-            ReadSync.requestHistoryOnceAsync(this);
-            StateSync.requestSnapshotAsync(this, false);
-            StateSync.flushPendingAsync(this);
-            FirebaseUsageMonitor.refreshAsync(this, true);
         } else {
             ensureFirebaseLogin();
         }
-        refresh();
+        handler.removeCallbacks(initialRefresh);
+        handler.postDelayed(initialRefresh, 280L);
     }
 }
