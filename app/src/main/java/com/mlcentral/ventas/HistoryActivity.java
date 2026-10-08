@@ -221,7 +221,7 @@ public class HistoryActivity extends Activity {
         monthlyCount.setPadding(0, UiKit.dp(this, 11), 0, 0);
         card.addView(monthlyCount);
 
-        monthlyHint = UiKit.text(this, "El resumen se arma con el historial sincronizado de Windows.", 12, UiKit.MUTED, false);
+        monthlyHint = UiKit.text(this, "El resumen excluye cancelaciones cuando Windows ya sincronizó los estados.", 12, UiKit.MUTED, false);
         monthlyHint.setPadding(0, UiKit.dp(this, 5), 0, 0);
         card.addView(monthlyHint);
 
@@ -344,7 +344,9 @@ public class HistoryActivity extends Activity {
         }
 
         if (warnings.isEmpty()) {
-            monthlyHint.setText("Mes completo según el historial sincronizado.");
+            monthlyHint.setText(StateStore.lastSyncAt(this) > 0L
+                    ? "Ventas válidas según Windows · canceladas no suman."
+                    : "Mes provisional hasta sincronizar estados con Windows.");
             monthlyHint.setTextColor(UiKit.GREEN);
         } else {
             monthlyHint.setText("⚠ " + join(warnings, " · "));
