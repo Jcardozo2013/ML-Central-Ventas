@@ -499,6 +499,12 @@ public class MainActivity extends Activity {
         return "monthly_profit_goal_cents_" + year + "_" + month;
     }
 
+    private String formatPesos(double value) {
+        String s = String.format(Locale.US, "%,.2f", value)
+                .replace(",", "X").replace(".", ",").replace("X", ".");
+        return s + " pesos";
+    }
+
     private void showMonthlyGoalDialog() {
         Calendar c = Calendar.getInstance();
         final int year = c.get(Calendar.YEAR);
@@ -562,9 +568,9 @@ public class MainActivity extends Activity {
         double goal = goalCents / 100.0;
         double pct = goal > 0.0 ? (currentProfit / goal) * 100.0 : 0.0;
         String pctText = String.format(Locale.getDefault(), "%.1f%%", pct);
-        monthlyGoalValue.setText(SaleStore.formatMoney(goal) + " · " + pctText);
-        monthlyGoalProgress.setText("Llevás " + SaleStore.formatMoney(currentProfit)
-                + " de " + SaleStore.formatMoney(goal) + " este mes.");
+        monthlyGoalValue.setText(formatPesos(goal) + " · " + pctText);
+        monthlyGoalProgress.setText("Llevás " + formatPesos(currentProfit)
+                + " de " + formatPesos(goal) + " este mes.");
         boolean reached = pct >= 100.0;
         monthlyGoalValue.setTextColor(reached ? UiKit.GREEN : UiKit.ACCENT);
         monthlyGoalProgress.setTextColor(reached ? UiKit.GREEN : UiKit.MUTED);
