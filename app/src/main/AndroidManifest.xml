@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
@@ -28,6 +29,7 @@
         <activity android:name=".SettingsActivity" android:exported="false" android:label="Configuración" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".StatusActivity" android:exported="false" android:label="Estados" />
+        <activity android:name=".LabelScanActivity" android:exported="false" android:label="Escanear etiqueta" />
         <activity android:name=".DailyWorkActivity" android:exported="false" android:label="Mi trabajo de hoy" />
         <activity android:name=".MovementHistoryActivity" android:exported="false" android:label="Movimientos" />
         <activity android:name=".UnreadSalesActivity" android:exported="false" />
