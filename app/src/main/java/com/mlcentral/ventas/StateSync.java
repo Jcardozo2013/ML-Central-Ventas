@@ -8,6 +8,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.UUID;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class StateSync {
     public static final String STATE_REQUEST_TITLE = "MLC_STATE_REQUEST_V1";
@@ -149,6 +153,92 @@ public final class StateSync {
 
     public static synchronized String queueAction(Context context, String orderId, String action, String expectedStage) {
         return queueCommand(context, orderId, action, expectedStage, "");
+    }
+
+
+    /** Los únicos dos pasos permitidos desde el lector de etiquetas. */
+    public static final class ScanCommand {
+        public final String orderId;
+        public final String action;
+        public final String expectedStage;
+
+        public ScanCommand(String orderId, String action, String expectedStage) {
+            this.orderId = orderId == null ? "" : orderId.trim();
+            this.action = action == null ? "" : action.trim();
+            this.expectedStage = expectedStage == null ? "" : expectedStage.trim();
+        }
+    }
+
+    public static final class BatchResult {
+        public final int queued;
+        public final List<String> rejectedOrderIds;
+
+        BatchResult(int queued, List<String> rejectedOrderIds) {
+            this.queued = queued;
+            this.rejectedOrderIds = rejectedOrderIds;
+        }
+    }
+
+    /**
+     * Encolar una tanda de QR con una sola escritura persistente.
+     * El lector NO actualiza estados locales: espera confirmación de Windows.
+     * No interfiere con queueAction/queueUndo de las pantallas existentes.
+     */
+    public static synchronized BatchResult queueScanBatch(Context context, List<ScanCommand> commands) {
+        Context app = context.getApplicationContext();
+        List<String> rejected = new ArrayList<>();
+        if (commands == null || commands.isEmpty()) return new BatchResult(0, rejected);
+        JSONArray commandsBefore = pending(app);
+        Set<String> pendingOrders = new HashSet<>();
+        for (int i = 0; i < commandsBefore.length(); i++) {
+            JSONObject cmd = commandsBefore.optJSONObject(i);
+            if (cmd != null) pendingOrders.add(cmd.optString("order_id", "").trim());
+        }
+        JSONObject current = StateStore.snapshotSales(app);
+        int queued = 0;
+        for (ScanCommand entry : commands) {
+            if (entry == null) continue;
+            String order = entry.orderId;
+            JSONObject actual = current.optJSONObject(order);
+            boolean allowed = ("br_arrived".equals(entry.expectedStage)
+                    && "mark_received".equals(entry.action))
+                    || ("pending_rocha".equals(entry.expectedStage)
+                    && "send_to_rocha".equals(entry.action));
+            if (order.isEmpty() || !allowed || actual == null
+                    || !entry.expectedStage.equals(actual.optString("stage", ""))
+                    || pendingOrders.contains(order)) {
+                rejected.add(order);
+                continue;
+            }
+            JSONObject command = new JSONObject();
+            try {
+                command.put("type", "state_change_v1");
+                command.put("command_id", UUID.randomUUID().toString());
+                command.put("order_id", order);
+                command.put("action", entry.action);
+                command.put("expected_stage", entry.expectedStage);
+                command.put("at", System.currentTimeMillis() / 1000L);
+                commandsBefore.put(command);
+                pendingOrders.add(order);
+                queued++;
+            } catch (Exception ex) {
+                rejected.add(order);
+            }
+        }
+        if (queued > 0) {
+            // Garantizar guardado completo antes de iniciar el envío; una orden
+            // no se pierde si el usuario cierra la cámara inmediatamente.
+            boolean saved = prefs(app).edit()
+                    .putString(PENDING_KEY, commandsBefore.toString()).commit();
+            if (!saved) {
+                rejected.clear();
+                for (ScanCommand cmd : commands) if (cmd != null) rejected.add(cmd.orderId);
+                return new BatchResult(0, rejected);
+            }
+            StateStore.setStatus(app, queued + " cambios de etiqueta esperando PC");
+            flushPendingAsync(app);
+        }
+        return new BatchResult(queued, rejected);
     }
 
     public static synchronized String queueUndo(Context context, String eventId, String orderId, String expectedStage) {
