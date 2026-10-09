@@ -1,171 +1,281 @@
 package com.mlcentral.ventas;
 
+import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.ClipData;
-import android.content.ClipboardManager;
-import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.ResultPoint;
+import com.journeyapps.barcodescanner.BarcodeCallback;
+import com.journeyapps.barcodescanner.BarcodeResult;
+import com.journeyapps.barcodescanner.DecoratedBarcodeView;
+import com.journeyapps.barcodescanner.DefaultDecoderFactory;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * Lectura local de etiquetas. Nunca cambia un estado por leer un QR:
- * sólo el botón Confirmar encola una orden al protocolo StateSync existente.
+ * Escaneo CONTINUO por tandas: abrir cámara, leer 1-100 etiquetas sin cerrar,
+ * Listo, revisar/eliminar filas y Confirmar todos UNA sola vez.
+ * Ningún escaneo modifica estados; Windows tiene la última palabra.
  */
 public final class LabelScanActivity extends Activity {
-    private TextView resultText;
-    private Button confirmButton;
-    private String selectedOrder = "";
-    private String selectedStage = "";
-    private String selectedAction = "";
-    private String selectedProduct = "";
+    private static final int CAMERA_PERMISSION_REQUEST = 1107;
+    private static final int MAX_BATCH = 100;
+
+    private static final class Item {
+        final String orderId, product, stage, action, before, after;
+        Item(String orderId, String product, String stage,
+             String action, String before, String after) {
+            this.orderId = orderId;
+            this.product = product;
+            this.stage = stage;
+            this.action = action;
+            this.before = before;
+            this.after = after;
+        }
+    }
+
+    private final LinkedHashMap<String, Item> selected = new LinkedHashMap<>();
+    private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "MLBatchScannerWorker");
+        t.setDaemon(true);
+        return t;
+    });
+    private Map<String, JSONObject> orders = Collections.emptyMap();
+    private Map<String, List<JSONObject>> packs = Collections.emptyMap();
+    private boolean indexReady = false;
+    private boolean inReview = false;
+    private boolean sending = false;
+    private boolean torchOn = false;
+    private boolean cameraGranted = false;
+    private int generation = 0;
+
+    private LinearLayout page;
+    private FrameLayout cameraPanel;
+    private DecoratedBarcodeView camera;
+    private LinearLayout reviewPanel, reviewRows;
+    private TextView counter, scanNotice, reviewTitle, reviewNotice;
+    private Button ready, confirm, continueScan;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        LinearLayout shell = new LinearLayout(this);
-        shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackgroundColor(UiKit.BG);
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(UiKit.dp(this, 18), UiKit.dp(this, 24),
-                UiKit.dp(this, 18), UiKit.dp(this, 24));
-        scroll.addView(root);
-        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        buildUi();
+        indexSalesAsync();
+        // Al entrar se activa la cámara directamente, sin pantalla intermedia.
+        startCameraIfAllowed();
+    }
 
-        root.addView(UiKit.text(this, "Escanear etiqueta", 27, UiKit.TEXT, true));
-        root.addView(UiKit.text(this,
-                "El mismo QR se usa en cada etapa. Escanear no modifica nada: tenés que confirmar.",
-                14, UiKit.MUTED, false), UiKit.fullWidth(this, 7, 16));
+    private void buildUi() {
+        page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(UiKit.BG);
 
-        Button scan = UiKit.primaryButton(this, "Abrir cámara y escanear");
-        scan.setOnClickListener(v -> startScan());
-        root.addView(scan, UiKit.fullWidth(this, 0, 12));
+        cameraPanel = new FrameLayout(this);
+        cameraPanel.setBackgroundColor(Color.BLACK);
+        camera = new DecoratedBarcodeView(this);
+        camera.getBarcodeView().setDecoderFactory(new DefaultDecoderFactory(
+                Arrays.asList(BarcodeFormat.QR_CODE, BarcodeFormat.CODE_128,
+                        BarcodeFormat.CODE_39)));
+        camera.setStatusText("Apuntá al QR ORDEN de la etiqueta");
+        camera.decodeContinuous(new BarcodeCallback() {
+            @Override public void barcodeResult(BarcodeResult result) {
+                if (result == null || result.getText() == null
+                        || inReview || sending) return;
+                onScanned(result.getText().trim());
+            }
+            @Override public void possibleResultPoints(List<ResultPoint> resultPoints) {}
+        });
+        cameraPanel.addView(camera, new FrameLayout.LayoutParams(-1, -1));
 
-        LinearLayout card = UiKit.card(this);
-        resultText = UiKit.text(this,
-                "Escaneá la etiqueta interna de ML Central (QR ORDEN).",
-                15, UiKit.TEXT, false);
-        card.addView(resultText);
-        confirmButton = UiKit.primaryButton(this, "Confirmar cambio de estado");
-        confirmButton.setEnabled(false);
-        confirmButton.setOnClickListener(v -> confirm());
-        card.addView(confirmButton, UiKit.fullWidth(this, 12, 0));
-        root.addView(card, UiKit.fullWidth(this, 0, 12));
+        LinearLayout overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setPadding(UiKit.dp(this, 15), UiKit.dp(this, 18),
+                UiKit.dp(this, 15), UiKit.dp(this, 20));
+        overlay.setBackgroundColor(Color.argb(226, 14, 23, 41));
 
-        TextView info = UiKit.text(this,
-                "1.er escaneo: Llegaron BR → Pendiente Rocha.\n"
-                + "2.º escaneo: Pendiente Rocha → A Rocha.\n"
-                + "Para el segundo escaneo, primero debe llegar la confirmación de Windows.",
+        counter = UiKit.text(this, "0 etiquetas escaneadas", 21, Color.WHITE, true);
+        overlay.addView(counter);
+        scanNotice = UiKit.text(this, "Abriendo cámara…", 13,
+                Color.rgb(211, 229, 249), false);
+        overlay.addView(scanNotice, UiKit.fullWidth(this, 4, 12));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button exit = UiKit.button(this, "Salir");
+        exit.setOnClickListener(v -> finish());
+        actions.addView(exit, new LinearLayout.LayoutParams(0, -2, 1));
+
+        Button torch = UiKit.button(this, "Luz");
+        torch.setOnClickListener(v -> {
+            torchOn = !torchOn;
+            if (torchOn) camera.setTorchOn(); else camera.setTorchOff();
+            torch.setText(torchOn ? "Luz ✓" : "Luz");
+        });
+        LinearLayout.LayoutParams torchParams = new LinearLayout.LayoutParams(0, -2, 1);
+        torchParams.setMargins(UiKit.dp(this, 7), 0, 0, 0);
+        actions.addView(torch, torchParams);
+
+        ready = UiKit.primaryButton(this, "Listo (0)");
+        ready.setEnabled(false);
+        ready.setOnClickListener(v -> openReview());
+        LinearLayout.LayoutParams readyParams = new LinearLayout.LayoutParams(0, -2, 1.5f);
+        readyParams.setMargins(UiKit.dp(this, 7), 0, 0, 0);
+        actions.addView(ready, readyParams);
+        overlay.addView(actions);
+
+        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(-1, -2,
+                Gravity.BOTTOM);
+        cameraPanel.addView(overlay, overlayParams);
+        page.addView(cameraPanel, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        reviewPanel = new LinearLayout(this);
+        reviewPanel.setOrientation(LinearLayout.VERTICAL);
+        reviewPanel.setPadding(UiKit.dp(this, 16), UiKit.dp(this, 20),
+                UiKit.dp(this, 16), UiKit.dp(this, 16));
+        reviewTitle = UiKit.text(this, "Revisar etiquetas", 25, UiKit.TEXT, true);
+        reviewPanel.addView(reviewTitle);
+        reviewNotice = UiKit.text(this,
+                "Verificá cada orden. Tocá ✕ para quitar un escaneo antes de confirmar.",
                 13, UiKit.MUTED, false);
-        root.addView(info, UiKit.fullWidth(this, 6, 14));
-        Button statuses = UiKit.button(this, "Ver Estados y sincronización");
-        statuses.setOnClickListener(v -> startActivity(new Intent(this, StatusActivity.class)));
-        root.addView(statuses);
-        shell.addView(UiKit.bottomNav(this, -1),
-                new LinearLayout.LayoutParams(-1, -2));
-        setContentView(shell);
+        reviewPanel.addView(reviewNotice, UiKit.fullWidth(this, 6, 9));
+
+        ScrollView scroll = new ScrollView(this);
+        reviewRows = new LinearLayout(this);
+        reviewRows.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(reviewRows);
+        reviewPanel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        continueScan = UiKit.button(this, "Seguir escaneando");
+        continueScan.setOnClickListener(v -> resumeBatch());
+        reviewPanel.addView(continueScan, UiKit.fullWidth(this, 10, 8));
+
+        confirm = UiKit.primaryButton(this, "Confirmar cambios");
+        confirm.setOnClickListener(v -> confirmBatch());
+        reviewPanel.addView(confirm);
+        reviewPanel.setVisibility(View.GONE);
+        page.addView(reviewPanel, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        setContentView(page);
+        updateCounter();
     }
 
-    private void startScan() {
-        clearSelection("Abriendo cámara…");
-        new IntentIntegrator(this)
-                .setDesiredBarcodeFormats(IntentIntegrator.ALL_CODE_TYPES)
-                .setPrompt("Apuntá al QR ORDEN de ML Central")
-                .setBeepEnabled(true)
-                .setOrientationLocked(false)
-                .initiateScan();
+    private void indexSalesAsync() {
+        final int request = ++generation;
+        worker.execute(() -> {
+            Map<String,JSONObject> idIndex = new HashMap<>();
+            Map<String,List<JSONObject>> packIndex = new HashMap<>();
+            try {
+                JSONObject snapshot = StateStore.snapshotSales(getApplicationContext());
+                JSONArray ids = snapshot.names();
+                if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                    JSONObject row = snapshot.optJSONObject(ids.optString(i));
+                    if (row == null) continue;
+                    String id = row.optString("order_id", "").trim();
+                    if (!id.isEmpty()) idIndex.put(id, row);
+                    String pack = row.optString("pack_id", "").trim();
+                    if (!pack.isEmpty()) {
+                        if (!packIndex.containsKey(pack)) packIndex.put(pack, new ArrayList<>());
+                        packIndex.get(pack).add(row);
+                    }
+                }
+            } catch (Exception ignored) {}
+            runOnUiThread(() -> {
+                if (generation != request || isFinishing()) return;
+                orders = idIndex;
+                packs = packIndex;
+                indexReady = true;
+                if (!inReview) scanNotice.setText("Escaneá varias etiquetas. Tocá Listo al terminar.");
+            });
+        });
     }
 
-    private void clearSelection(String text) {
-        selectedOrder = "";
-        selectedStage = "";
-        selectedAction = "";
-        selectedProduct = "";
-        if (resultText != null) resultText.setText(text);
-        if (confirmButton != null) confirmButton.setEnabled(false);
-    }
-
-    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (result != null) {
-            if (result.getContents() == null) {
-                clearSelection("Escaneo cancelado; no se cambió ningún estado.");
-            } else {
-                inspect(result.getContents().trim());
-            }
+    private void startCameraIfAllowed() {
+        if (Build.VERSION.SDK_INT < 23 ||
+                checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            cameraGranted = true;
+            if (!inReview) camera.resume();
         } else {
-            super.onActivityResult(requestCode, resultCode, data);
+            scanNotice.setText("Necesitamos permiso de cámara para escanear las etiquetas.");
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
         }
     }
 
-    /** Sólo aceptamos identificadores numéricos, sin URLs ni órdenes arbitrarias. */
-    private void inspect(String encoded) {
-        clearSelection("Buscando venta…");
-        String id = encoded.startsWith("MLC1:") ? encoded.substring(5) : encoded;
-        if (!id.matches("[0-9]{5,32}")) {
-            clearSelection("Código no reconocido. Escaneá el QR ORDEN de una etiqueta interna ML Central.");
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                                      int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != CAMERA_PERMISSION_REQUEST) return;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            cameraGranted = true;
+            if (!inReview) camera.resume();
+        } else {
+            scanNotice.setText("Cámara sin permiso. Volvé a entrar y autorizá el acceso.");
+            Toast.makeText(this, "La cámara necesita permiso para escanear", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void onScanned(String encoded) {
+        if (!indexReady) {
+            scanNotice.setText("Cargando las órdenes guardadas…");
             return;
         }
-
-        JSONObject sales = StateStore.snapshotSales(this);
-        JSONArray keys = sales.names();
-        List<JSONObject> matches = new ArrayList<>();
-        if (keys != null) for (int i = 0; i < keys.length(); i++) {
-            JSONObject row = sales.optJSONObject(keys.optString(i));
-            if (row == null) continue;
-            String order = row.optString("order_id", "").trim();
-            String pack = row.optString("pack_id", "").trim();
-            if (id.equals(order) || (encoded.equals(id) && id.equals(pack))) {
-                matches.add(row);
+        String id = encoded.startsWith("MLC1:") ? encoded.substring(5).trim() : encoded;
+        if (!id.matches("[0-9]{5,32}")) {
+            scanNotice.setText("QR no reconocido · usá la etiqueta interna de ML Central.");
+            return;
+        }
+        JSONObject row = orders.get(id);
+        if (row == null) {
+            // Las etiquetas antiguas pueden contener pack_id. Sólo aceptar si
+            // corresponde inequívocamente a UNA venta.
+            List<JSONObject> candidates = packs.get(id);
+            if (candidates != null && candidates.size() == 1) row = candidates.get(0);
+            else if (candidates != null && candidates.size() > 1) {
+                scanNotice.setText("Pack " + id + " tiene varias órdenes. Escaneá QR ORDEN.");
+                return;
             }
         }
-        if (matches.isEmpty()) {
-            clearSelection("Orden " + id + " no aparece en los estados sincronizados. "
-                    + "Actualizá Estados y volvé a escanear. Nada cambió.");
+        if (row == null) {
+            scanNotice.setText("No se encontró orden " + id + " en estados de Windows.");
             return;
         }
-        if (matches.size() != 1) {
-            clearSelection("El número " + id + " corresponde a varias órdenes del mismo pack. "
-                    + "Imprimí la etiqueta con QR ORDEN de la orden exacta. Nada cambió.");
-            return;
-        }
-
-        JSONObject row = matches.get(0);
         String order = row.optString("order_id", "").trim();
-        String stage = row.optString("stage", "");
-        String product = row.optString("product", "Producto");
+        if (selected.containsKey(order)) {
+            scanNotice.setText("Ya está en la tanda: " + order + " · " + selected.size() + " etiquetas.");
+            return;
+        }
+        if (selected.size() >= MAX_BATCH) {
+            scanNotice.setText("Límite de " + MAX_BATCH + " etiquetas. Tocá Listo.");
+            return;
+        }
         if (StateSync.hasPendingForOrder(this, order)) {
-            clearSelection("Orden " + order + "\n" + product
-                    + "\n\nYa tiene un cambio pendiente. Esperá la confirmación de Windows; no se envió otro.");
+            scanNotice.setText("Orden " + order + ": cambio anterior pendiente de la PC.");
             return;
         }
 
-        // Bloqueo persistente de doble escaneo si un resultado quedó pendiente,
-        // incluso si la aplicación se cerró entre medio.
-        android.content.SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
-        if (order.equals(p.getString("scan_last_order_v175", ""))
-                && stage.equals(p.getString("scan_last_stage_v175", ""))) {
-            clearSelection("Orden " + order + "\n" + product
-                    + "\n\nYa confirmaste el cambio desde este estado. "
-                    + "Esperá que Windows confirme el siguiente estado. Nada cambió.");
-            return;
-        }
-
+        String stage = row.optString("stage", "");
         String action, before, after;
         if ("br_arrived".equals(stage)) {
             action = "mark_received";
@@ -176,62 +286,152 @@ public final class LabelScanActivity extends Activity {
             before = "Pendiente Rocha";
             after = "A Rocha";
         } else {
-            clearSelection("Orden " + order + "\n" + product + "\n\n"
-                    + "Estado actual: " + row.optString("stage_label", stage)
-                    + "\nNo corresponde cambiar con este escaneo. Nada cambió.");
+            scanNotice.setText("Orden " + order + " en estado "
+                    + row.optString("stage_label", stage) + ": no avanza por QR.");
             return;
         }
-
-        selectedOrder = order;
-        selectedStage = stage;
-        selectedAction = action;
-        selectedProduct = product;
-        resultText.setText(product + "\nOrden " + order
-                + "\n\nESTADO ACTUAL: " + before
-                + "\nCAMBIO PROPUESTO: " + after
-                + "\n\nTodavía NO se cambió nada.");
-        confirmButton.setEnabled(true);
+        selected.put(order, new Item(order,
+                row.optString("product", "Producto"), stage, action, before, after));
+        updateCounter();
+        scanNotice.setText("✓ " + row.optString("product", "Producto")
+                + " · agregada " + selected.size() + "/" + MAX_BATCH);
     }
 
-    private void confirm() {
-        if (selectedOrder.isEmpty() || selectedAction.isEmpty()) return;
-        final String order = selectedOrder, stage = selectedStage;
-        final String action = selectedAction, product = selectedProduct;
-        if (StateSync.hasPendingForOrder(this, order)) {
-            clearSelection("Esa orden ya tiene un cambio pendiente. Esperá la PC.");
-            return;
+    private void updateCounter() {
+        int n = selected.size();
+        counter.setText(n + (n == 1 ? " etiqueta escaneada" : " etiquetas escaneadas"));
+        ready.setText("Listo (" + n + ")");
+        ready.setEnabled(n > 0 && !sending);
+    }
+
+    private void openReview() {
+        if (selected.isEmpty() || sending) return;
+        inReview = true;
+        camera.pause();
+        cameraPanel.setVisibility(View.GONE);
+        reviewPanel.setVisibility(View.VISIBLE);
+        renderReview();
+    }
+
+    private void renderReview() {
+        reviewRows.removeAllViews();
+        reviewTitle.setText("Revisar " + selected.size()
+                + (selected.size() == 1 ? " etiqueta" : " etiquetas"));
+        confirm.setText("Confirmar " + selected.size()
+                + (selected.size() == 1 ? " cambio" : " cambios"));
+        confirm.setEnabled(!selected.isEmpty() && !sending);
+        continueScan.setEnabled(!sending);
+        if (selected.isEmpty()) {
+            reviewRows.addView(UiKit.text(this,
+                    "No quedan etiquetas. Tocá Seguir escaneando para agregar otras.",
+                    14, UiKit.MUTED, false));
         }
-        new AlertDialog.Builder(this)
-                .setTitle("¿Confirmar cambio de estado?")
-                .setMessage(product + "\nOrden " + order + "\n\n"
-                        + ("mark_received".equals(action)
-                        ? "Llegaron BR → Pendiente Rocha" : "Pendiente Rocha → A Rocha")
-                        + "\n\nWindows debe confirmar el cambio. Esta operación no despacha por Mercado Libre.")
-                .setNegativeButton("Cancelar", null)
-                .setPositiveButton("Confirmar", (d,w) -> {
-                    // El estado puede haber cambiado mientras mirábamos el diálogo.
-                    if (StateSync.hasPendingForOrder(this, order)) {
-                        clearSelection("La orden ya tiene un cambio pendiente. No se duplicó.");
-                        return;
+        for (Item item : new ArrayList<>(selected.values())) {
+            LinearLayout card = UiKit.card(this);
+            LinearLayout line = new LinearLayout(this);
+            line.setGravity(Gravity.CENTER_VERTICAL);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            info.addView(UiKit.text(this, item.product, 16, UiKit.TEXT, true));
+            info.addView(UiKit.text(this, "Orden " + item.orderId, 12, UiKit.MUTED, false),
+                    UiKit.fullWidth(this, 4, 5));
+            info.addView(UiKit.text(this, item.before + "  →  " + item.after,
+                    13, UiKit.ACCENT, true));
+            line.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+            Button remove = UiKit.button(this, "✕");
+            remove.setTextColor(UiKit.RED);
+            remove.setTextSize(20);
+            remove.setOnClickListener(v -> {
+                selected.remove(item.orderId);
+                renderReview();
+            });
+            LinearLayout.LayoutParams removeParams =
+                    new LinearLayout.LayoutParams(UiKit.dp(this, 49), UiKit.dp(this, 49));
+            removeParams.setMargins(UiKit.dp(this, 8), 0, 0, 0);
+            line.addView(remove, removeParams);
+            card.addView(line);
+            reviewRows.addView(card, UiKit.fullWidth(this, 0, 9));
+        }
+    }
+
+    private void resumeBatch() {
+        if (sending) return;
+        inReview = false;
+        reviewPanel.setVisibility(View.GONE);
+        cameraPanel.setVisibility(View.VISIBLE);
+        updateCounter();
+        if (cameraGranted) camera.resume();
+        else startCameraIfAllowed();
+        scanNotice.setText("Seguís escaneando · " + selected.size() + " en la tanda.");
+    }
+
+    private void confirmBatch() {
+        if (selected.isEmpty() || sending) return;
+        sending = true;
+        renderReview();
+        reviewNotice.setText("Guardando la tanda y enviando a Windows…");
+        List<StateSync.ScanCommand> batch = new ArrayList<>();
+        for (Item item : selected.values()) {
+            batch.add(new StateSync.ScanCommand(item.orderId, item.action, item.stage));
+        }
+        final int request = generation;
+        worker.execute(() -> {
+            StateSync.BatchResult result = StateSync.queueScanBatch(getApplicationContext(), batch);
+            runOnUiThread(() -> {
+                if (request != generation || isFinishing()) return;
+                sending = false;
+                if (result.queued > 0) {
+                    for (StateSync.ScanCommand command : batch) {
+                        if (!result.rejectedOrderIds.contains(command.orderId))
+                            selected.remove(command.orderId);
                     }
-                    JSONObject latest = StateStore.snapshotSales(this).optJSONObject(order);
-                    if (latest == null || !stage.equals(latest.optString("stage", ""))) {
-                        clearSelection("El estado de la orden cambió. Volvé a escanear para verificarlo.");
-                        return;
-                    }
-                    String commandId = StateSync.queueAction(this, order, action, stage);
-                    if (commandId == null || commandId.isEmpty()) {
-                        clearSelection("No se pudo guardar el cambio. No se envió.");
-                        return;
-                    }
-                    getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE).edit()
-                            .putString("scan_last_order_v175", order)
-                            .putString("scan_last_stage_v175", stage).apply();
-                    clearSelection("Cambio enviado para confirmación de Windows.\n"
-                            + product + "\nOrden " + order
-                            + "\n\nNo vuelvas a escanear hasta ver el estado nuevo confirmado.");
-                    Toast.makeText(this, "Cambio en cola · esperando confirmación de la PC",
+                }
+                renderReview();
+                if (result.queued > 0) {
+                    reviewNotice.setText(result.queued + " cambios guardados y enviados para "
+                            + "confirmación de Windows. "
+                            + (result.rejectedOrderIds.isEmpty()
+                            ? "Ninguna orden se perdió."
+                            : result.rejectedOrderIds.size()
+                              + " no se enviaron; revisá el estado actual antes de reintentar.")
+                            + " No se modifican estados hasta la confirmación de la PC.");
+                    Toast.makeText(this, "Tanda enviada · esperando confirmación de Windows",
                             Toast.LENGTH_LONG).show();
-                }).show();
+                } else {
+                    reviewNotice.setText("No se pudo encolar ningún cambio. "
+                            + "Revisá que los estados sigan vigentes y que no haya envíos pendientes.");
+                }
+                if (selected.isEmpty()) {
+                    confirm.setEnabled(false);
+                    continueScan.setText("Escanear otra tanda");
+                }
+            });
+        });
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (camera != null && cameraGranted && !inReview) camera.resume();
+    }
+
+    @Override protected void onPause() {
+        if (camera != null) camera.pause();
+        super.onPause();
+    }
+
+    @Override public void onBackPressed() {
+        if (inReview && !sending) {
+            resumeBatch();
+        } else if (!sending) {
+            super.onBackPressed();
+        }
+    }
+
+    @Override protected void onDestroy() {
+        generation++;
+        if (camera != null) camera.pause();
+        worker.shutdownNow();
+        super.onDestroy();
     }
 }
