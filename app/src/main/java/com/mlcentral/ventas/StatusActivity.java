@@ -13,6 +13,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -47,6 +48,7 @@ public class StatusActivity extends Activity {
     private LinearLayout cards;
     private LinearLayout list;
     private TextView syncStatus;
+    private TextView commandResult;
     private TextView listTitle;
     private String filter = "all";
     private int visibleLimit = PAGE_SIZE;
@@ -87,6 +89,10 @@ public class StatusActivity extends Activity {
         LinearLayout statusCard = UiKit.card(this);
         syncStatus = UiKit.text(this, "Estados PC: esperando sincronización…", 14, UiKit.TEXT, true);
         statusCard.addView(syncStatus);
+        commandResult = UiKit.text(this, "", 13, UiKit.MUTED, true);
+        commandResult.setPadding(0, UiKit.dp(this, 7), 0, 0);
+        commandResult.setVisibility(View.GONE);
+        statusCard.addView(commandResult);
         TextView note = UiKit.text(this,
                 "La PC es la fuente central. Si está apagada, los cambios quedan pendientes y se envían cuando vuelva.",
                 13, UiKit.MUTED, false);
@@ -164,6 +170,16 @@ public class StatusActivity extends Activity {
         int pending = pendingOrders.size();
         if (pending > 0) text += " · " + pending + (pending == 1 ? " cambio pendiente" : " cambios pendientes");
         syncStatus.setText(text);
+        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
+        String result = p.getString("state_last_command_result_v179", "");
+        long at = p.getLong("state_last_command_result_at_v179", 0L);
+        if (!result.isEmpty() && at > 0L && System.currentTimeMillis() - at < 24L * 3600000L) {
+            commandResult.setText("Último cambio: " + result);
+            commandResult.setTextColor(result.startsWith("PC rechazó") ? UiKit.RED : UiKit.GREEN);
+            commandResult.setVisibility(View.VISIBLE);
+        } else {
+            commandResult.setVisibility(View.GONE);
+        }
     }
 
     private Set<String> readPendingOrderIds() {
