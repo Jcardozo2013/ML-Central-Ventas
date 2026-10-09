@@ -286,6 +286,12 @@ public class StatusActivity extends Activity {
         TextView detail = UiKit.text(this, info.toString(), 13, UiKit.MUTED, false);
         card.addView(detail);
 
+        // Link exacto de compra BR enviado por Windows con la variante
+        // asociada a esta venta. Si falta no inventamos otro enlace.
+        boolean isBrPurchase = "purchase_pending".equals(stage);
+        PurchaseLinks.addToCard(this, card, row, isBrPurchase
+                && !"STOCK LOCAL".equals(row.optString("sale_origin", "")));
+
         boolean pending = pendingOrders.contains(orderId);
         String action = actionForStage(stage);
         if (pending) {
