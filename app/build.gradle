@@ -23,8 +23,8 @@ android {
         applicationId 'com.mlcentral.ventas'
         minSdk 26
         targetSdk 33
-        versionCode 79
-        versionName '1.78'
+        versionCode 80
+        versionName '1.79'
     }
 
     buildTypes {
