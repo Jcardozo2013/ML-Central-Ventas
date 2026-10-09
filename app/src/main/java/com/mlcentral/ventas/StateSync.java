@@ -27,6 +27,7 @@ public final class StateSync {
     private static final long REQUEST_RETRY_MS = 1800L;
     private static volatile boolean requesting = false;
     private static volatile boolean flushing = false;
+    private static volatile boolean flushRequested = false;
 
     private StateSync() {}
 
@@ -248,23 +249,37 @@ public final class StateSync {
     public static void flushPendingAsync(Context context) {
         Context app = context.getApplicationContext();
         synchronized (StateSync.class) {
-            if (flushing) return;
+            if (flushing) {
+                // Un lote nuevo puede entrar mientras se envían órdenes anteriores.
+                // Pedir otra pasada evita dejarlo en cola hasta el próximo reinicio.
+                flushRequested = true;
+                return;
+            }
             flushing = true;
+            flushRequested = false;
         }
         Thread t = new Thread(() -> {
             try {
-                JSONArray arr = pending(app);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject cmd = arr.optJSONObject(i);
-                    if (cmd == null) continue;
-                    PostResult sent = post(app, STATE_CHANGE_TITLE, cmd);
-                    if (!sent.ok) {
-                        setStatus(app, "Cambio pendiente · reintentando automáticamente");
+                boolean more;
+                do {
+                    synchronized (StateSync.class) { flushRequested = false; }
+                    JSONArray arr = pending(app);
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject cmd = arr.optJSONObject(i);
+                        if (cmd == null) continue;
+                        PostResult sent = post(app, STATE_CHANGE_TITLE, cmd);
+                        if (!sent.ok) {
+                            setStatus(app, "Cambio pendiente · se reintentará cuando haya conexión");
+                        }
+                        try { Thread.sleep(80L); } catch (InterruptedException ignored) {}
                     }
-                    try { Thread.sleep(80L); } catch (InterruptedException ignored) {}
-                }
+                    synchronized (StateSync.class) {
+                        more = flushRequested;
+                        if (!more) flushing = false;
+                    }
+                } while (more);
             } finally {
-                flushing = false;
+                synchronized (StateSync.class) { flushing = false; }
             }
         }, "MLCentralStateCommandSender");
         t.setDaemon(true);
