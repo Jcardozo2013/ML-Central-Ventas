@@ -342,7 +342,9 @@ public final class LabelScanActivity extends Activity {
             Button remove = UiKit.button(this, "✕");
             remove.setTextColor(UiKit.RED);
             remove.setTextSize(20);
+            remove.setEnabled(!sending);
             remove.setOnClickListener(v -> {
+                if (sending) return;
                 selected.remove(item.orderId);
                 renderReview();
             });
@@ -361,6 +363,9 @@ public final class LabelScanActivity extends Activity {
         reviewPanel.setVisibility(View.GONE);
         cameraPanel.setVisibility(View.VISIBLE);
         updateCounter();
+        // Recargar los últimos estados antes de una nueva tanda.
+        indexReady = false;
+        indexSalesAsync();
         if (cameraGranted) camera.resume();
         else startCameraIfAllowed();
         scanNotice.setText("Seguís escaneando · " + selected.size() + " en la tanda.");
@@ -389,8 +394,8 @@ public final class LabelScanActivity extends Activity {
                 }
                 renderReview();
                 if (result.queued > 0) {
-                    reviewNotice.setText(result.queued + " cambios guardados y enviados para "
-                            + "confirmación de Windows. "
+                    reviewNotice.setText(result.queued + " cambios guardados en cola para "
+                            + "enviar y confirmar en Windows. "
                             + (result.rejectedOrderIds.isEmpty()
                             ? "Ninguna orden se perdió."
                             : result.rejectedOrderIds.size()
