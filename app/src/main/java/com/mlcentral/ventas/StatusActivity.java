@@ -292,6 +292,10 @@ public class StatusActivity extends Activity {
         PurchaseLinks.addToCard(this, card, row, isBrPurchase
                 && !"STOCK LOCAL".equals(row.optString("sale_origin", "")));
 
+        // La etiqueta OFICIAL solo aparece al abrir una orden A Rocha.
+        // Nada se solicita a ML hasta que el usuario toque este botón.
+        ShippingLabelShare.addButton(this, card, row);
+
         boolean pending = pendingOrders.contains(orderId);
         String action = actionForStage(stage);
         if (pending) {
