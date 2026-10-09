@@ -194,6 +194,11 @@ public class FirebaseListenerService extends Service {
                 try {
                     pollMainRest();              // ventas/eventos: rápido
                     pollRsRest();                // leídos/cambios entre celulares
+                    if (StateSync.pendingCount(this) > 0) {
+                        // ACK durable de Windows: evita pendientes eternos si
+                        // el evento normal se perdió (también funciona en REST).
+                        StateSync.reconcileDurableResults(this);
+                    }
                     if ((cycle % 3) == 0) {      // tablero completo: cada ~30 s
                         pollDurableStateRest();
                     }
