@@ -23,8 +23,8 @@ android {
         applicationId 'com.mlcentral.ventas'
         minSdk 26
         targetSdk 33
-        versionCode 77
-        versionName '1.76'
+        versionCode 78
+        versionName '1.77'
     }
 
     buildTypes {
@@ -39,4 +39,5 @@ dependencies {
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-database'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'androidx.core:core:1.12.0'
 }
