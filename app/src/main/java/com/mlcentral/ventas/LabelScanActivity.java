@@ -241,15 +241,16 @@ public final class LabelScanActivity extends Activity {
             scanNotice.setText("Cargando las órdenes guardadas…");
             return;
         }
-        String id = encoded.startsWith("MLC1:") ? encoded.substring(5).trim() : encoded;
+        boolean exactQr = encoded.startsWith("MLC1:");
+        String id = exactQr ? encoded.substring(5).trim() : encoded;
         if (!id.matches("[0-9]{5,32}")) {
             scanNotice.setText("QR no reconocido · usá la etiqueta interna de ML Central.");
             return;
         }
         JSONObject row = orders.get(id);
-        if (row == null) {
-            // Las etiquetas antiguas pueden contener pack_id. Sólo aceptar si
-            // corresponde inequívocamente a UNA venta.
+        if (row == null && !exactQr) {
+            // Sólo una etiqueta vieja SIN prefijo permite pack_id como
+            // respaldo. Un QR ORDEN nunca se reasigna a otro pedido.
             List<JSONObject> candidates = packs.get(id);
             if (candidates != null && candidates.size() == 1) row = candidates.get(0);
             else if (candidates != null && candidates.size() > 1) {
@@ -263,7 +264,8 @@ public final class LabelScanActivity extends Activity {
         }
         String order = row.optString("order_id", "").trim();
         if (selected.containsKey(order)) {
-            scanNotice.setText("Ya está en la tanda: " + order + " · " + selected.size() + " etiquetas.");
+            // El lector puede ver el mismo QR muchos cuadros seguidos:
+            // ignorar sin refrescar la UI ni agregar la venta dos veces.
             return;
         }
         if (selected.size() >= MAX_BATCH) {
