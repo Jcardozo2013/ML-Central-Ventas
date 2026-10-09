@@ -268,6 +268,46 @@ public final class FirebaseTransport {
         }
     }
 
+
+    /**
+     * Respaldo durable de comandos CONFIRMADOS por el usuario.
+     * No utiliza listeners RTDB ni crea operaciones por su cuenta.
+     */
+    public static Result writeStateCommandRest(Context context, String commandId, JSONObject payload) {
+        if (commandId == null || !commandId.matches("[0-9a-fA-F-]{36}")
+                || payload == null || !commandId.equals(payload.optString("command_id", "")))
+            return new Result(false, "Identificador de comando inválido", "");
+        HttpURLConnection conn = null;
+        try {
+            FirebaseConfig.ensureInitialized(context);
+            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+            if (user == null || !FirebaseConfig.EXPECTED_UID.equals(user.getUid()))
+                return new Result(false, "Sesión Firebase sin autorización", "");
+            String token = getIdToken(user, false);
+            if (token.isEmpty()) return new Result(false, "No se obtuvo token Firebase", "");
+            String base = FirebaseConfig.DATABASE_URL;
+            if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+            String url = base + "/state_commands/" + commandId + ".json?auth="
+                    + URLEncoder.encode(token, StandardCharsets.UTF_8.name());
+            conn = (HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setRequestMethod("PUT");
+            conn.setConnectTimeout(7000);
+            conn.setReadTimeout(7000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+            try (java.io.OutputStream out = conn.getOutputStream()) { out.write(bytes); }
+            int status = conn.getResponseCode();
+            if (status >= 200 && status < 300) return new Result(true, "Comando en cola durable", commandId);
+            return new Result(false, "Firebase HTTP " + status, commandId);
+        } catch (Exception ex) {
+            return new Result(false, "Firebase: " + ex.getClass().getSimpleName()
+                    + " " + String.valueOf(ex.getMessage()), commandId);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     private static String getIdToken(FirebaseUser user, boolean forceRefresh) {
         if (user == null) return "";
         try {
