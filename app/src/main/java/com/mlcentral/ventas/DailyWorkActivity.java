@@ -171,6 +171,10 @@ public final class DailyWorkActivity extends Activity {
                 item.addView(UiKit.text(this, name, 14, UiKit.TEXT, true));
                 item.addView(UiKit.text(this, "Orden " + order + " · " + qty
                         + (qty == 1 ? " unidad" : " unidades"), 12, UiKit.MUTED, false));
+                if (groupIndex == 0) {
+                    // Pedido pendiente de compra: acceso directo al proveedor BR.
+                    PurchaseLinks.addToCard(this, item, row, true);
+                }
                 card.addView(item);
             }
             Button open = UiKit.button(this, "Abrir " + LABELS[g] +
