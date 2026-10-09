@@ -28,6 +28,14 @@
         <activity android:name=".DiagnosticActivity" android:exported="false" android:label="Diagnóstico ML Central" />
         <activity android:name=".SettingsActivity" android:exported="false" android:label="Configuración" />
         <activity android:name=".HistoryActivity" android:exported="false" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.shippinglabels"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shipping_label_share_paths"/>
+        </provider>
         <activity android:name=".StatusActivity" android:exported="false" android:label="Estados" />
         <activity android:name=".LabelScanActivity" android:exported="false" android:label="Escanear etiqueta" android:screenOrientation="portrait" />
         <activity android:name=".DailyWorkActivity" android:exported="false" android:label="Mi trabajo de hoy" />
