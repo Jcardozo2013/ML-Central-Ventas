@@ -268,9 +268,16 @@ public final class StateSync {
                     for (int i = 0; i < arr.length(); i++) {
                         JSONObject cmd = arr.optJSONObject(i);
                         if (cmd == null) continue;
+                        // Publicar el comando confirmado en dos rutas.
+                        // Windows deduplica por command_id: nunca aplica dos veces.
+                        FirebaseTransport.Result durable =
+                                FirebaseTransport.writeStateCommandRest(app,
+                                        cmd.optString("command_id", ""), cmd);
                         PostResult sent = post(app, STATE_CHANGE_TITLE, cmd);
-                        if (!sent.ok) {
-                            setStatus(app, "Cambio pendiente · se reintentará cuando haya conexión");
+                        if (!sent.ok && !durable.ok) {
+                            setStatus(app, "Cambio NO enviado · reintentará cuando haya conexión");
+                        } else {
+                            setStatus(app, "Cambio enviado · esperando confirmación de Windows");
                         }
                         try { Thread.sleep(80L); } catch (InterruptedException ignored) {}
                     }
@@ -290,6 +297,30 @@ public final class StateSync {
         }, "MLCentralStateCommandSender");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * Recupera ACKs por ID de comandos pendientes si se perdió el evento.
+     * Se ejecuta desde un hilo de fondo y no modifica estados sin ACK.
+     */
+    public static void reconcileDurableResults(Context context) {
+        Context app = context.getApplicationContext();
+        JSONArray requests = pending(app);
+        for (int i = 0; i < requests.length(); i++) {
+            JSONObject cmd = requests.optJSONObject(i);
+            if (cmd == null) continue;
+            String cid = cmd.optString("command_id", "").trim();
+            String oid = cmd.optString("order_id", "").trim();
+            if (!cid.matches("[0-9a-fA-F-]{36}") || oid.isEmpty()) continue;
+            FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(
+                    app, "state_command_results/" + cid, 0);
+            if (!result.ok || result.data == null) continue;
+            JSONObject ack = result.data;
+            if (!"state_change_result_v1".equals(ack.optString("type", ""))
+                    || !cid.equals(ack.optString("command_id", ""))
+                    || !oid.equals(ack.optString("order_id", ""))) continue;
+            handleResult(app, ack);
+        }
     }
 
     public static synchronized int pendingCount(Context context) {
@@ -331,7 +362,12 @@ public final class StateSync {
         if (state != null) StateStore.upsertState(app, state);
         boolean ok = success(body);
         String message = body.optString("message", ok ? "Cambio confirmado" : "Cambio rechazado");
-        StateStore.setStatus(app, (ok ? "PC confirmó: " : "PC rechazó: ") + message);
+        String detail = (ok ? "PC confirmó: " : "PC rechazó: ") + message;
+        prefs(app).edit()
+                .putString("state_last_command_result_v179", detail)
+                .putLong("state_last_command_result_at_v179", System.currentTimeMillis())
+                .apply();
+        StateStore.setStatus(app, detail);
         notifyUi(app);
     }
 }
