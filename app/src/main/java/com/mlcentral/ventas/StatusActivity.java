@@ -294,6 +294,9 @@ public class StatusActivity extends Activity {
 
         // La etiqueta OFICIAL solo aparece al abrir una orden A Rocha.
         // Nada se solicita a ML hasta que el usuario toque este botón.
+        // La acción REAL de Mercado Libre se presenta sólo en una orden de
+        // A Rocha; nunca la dispara abrir la tarjeta ni bajar el PDF.
+        StockReadyConfirm.addButton(this, card, row);
         ShippingLabelShare.addButton(this, card, row);
 
         boolean pending = pendingOrders.contains(orderId);
