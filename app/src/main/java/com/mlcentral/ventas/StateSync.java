@@ -259,6 +259,7 @@ public final class StateSync {
             flushRequested = false;
         }
         Thread t = new Thread(() -> {
+            boolean released = false;
             try {
                 boolean more;
                 do {
@@ -275,11 +276,16 @@ public final class StateSync {
                     }
                     synchronized (StateSync.class) {
                         more = flushRequested;
-                        if (!more) flushing = false;
+                        if (!more) {
+                            flushing = false;
+                            released = true;
+                        }
                     }
                 } while (more);
             } finally {
-                synchronized (StateSync.class) { flushing = false; }
+                if (!released) {
+                    synchronized (StateSync.class) { flushing = false; }
+                }
             }
         }, "MLCentralStateCommandSender");
         t.setDaemon(true);
