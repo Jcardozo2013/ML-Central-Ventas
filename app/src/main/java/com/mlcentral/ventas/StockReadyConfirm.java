@@ -129,9 +129,10 @@ public final class StockReadyConfirm {
             final boolean wasPosted=posted;
             a.runOnUiThread(() -> {
                 if (a.isFinishing() || (Build.VERSION.SDK_INT>=17 && a.isDestroyed())) return;
-                btn.setEnabled(true);
-                btn.setText("Ya tengo el producto (confirmar en ML)");
                 boolean verified = "ready".equals(endStatus) || "already".equals(endStatus);
+                btn.setEnabled(!verified);
+                btn.setText(verified ? "Producto ya confirmado en ML" :
+                        "Ya tengo el producto (confirmar en ML)");
                 new AlertDialog.Builder(a).setTitle(verified ? "Mercado Libre confirmó"
                         : "Verificar la orden en Mercado Libre")
                     .setMessage(endMsg + (verified
