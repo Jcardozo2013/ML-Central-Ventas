@@ -325,6 +325,11 @@ public class MainActivity extends Activity {
         dailyWork.setOnClickListener(v -> startActivity(new Intent(this, DailyWorkActivity.class)));
         root.addView(dailyWork, UiKit.fullWidth(this, 0, 12));
 
+        Button scanLabel = UiKit.button(this, "Escanear etiqueta · Cambiar estado");
+        scanLabel.setOnClickListener(v ->
+                startActivity(new Intent(this, LabelScanActivity.class)));
+        root.addView(scanLabel, UiKit.fullWidth(this, 0, 10));
+
         TextView section = UiKit.text(this, "Resumen", 20, UiKit.TEXT, true);
         root.addView(section, UiKit.fullWidth(this, 0, 10));
 
