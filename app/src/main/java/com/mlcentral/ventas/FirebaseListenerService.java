@@ -231,8 +231,11 @@ public class FirebaseListenerService extends Service {
         long updated = root.optLong("updated_at", 0L);
         long seenUpdated = p.getLong("firebase_rest_state_updated_v157", 0L);
 
+        // Si quedó a medias un lote heredado, recuperar el tablero completo
+        // aunque Windows no haya modificado su updated_at desde la última lectura.
+        boolean interruptedLegacy = StateStore.hasUnfinishedLegacySnapshot(this);
         // Si Windows entrega versión/fecha, ésa es la comparación principal.
-        if (updated > 0L && updated <= seenUpdated) {
+        if (updated > 0L && updated <= seenUpdated && !interruptedLegacy) {
             p.edit().putString("firebase_rest_receive_mode_v157", "REST ACTIVO").apply();
             return;
         }
@@ -243,7 +246,7 @@ public class FirebaseListenerService extends Service {
         String signature = Integer.toHexString(sales.toString().hashCode())
                 + ":" + root.optInt("total", sales.length());
         String previousSignature = p.getString("firebase_rest_state_hash_v158", "");
-        if (updated <= 0L && signature.equals(previousSignature)) {
+        if (updated <= 0L && signature.equals(previousSignature) && !interruptedLegacy) {
             p.edit().putString("firebase_rest_receive_mode_v157", "REST ACTIVO").apply();
             return;
         }
