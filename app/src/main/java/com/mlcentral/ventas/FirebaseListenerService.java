@@ -248,7 +248,7 @@ public class FirebaseListenerService extends Service {
             return;
         }
 
-        StateStore.applyDurableSnapshot(this, sales, root.optInt("total", sales.length()));
+        StateStore.applyDurableSnapshot(this, sales, root.optInt("total", sales.length()), updated);
         p.edit()
                 .putLong("firebase_rest_state_updated_v157",
                         updated > 0L ? updated : seenUpdated)
@@ -436,7 +436,8 @@ public class FirebaseListenerService extends Service {
                         JSONObject sales = root.optJSONObject("sales");
                         if (sales == null) return;
                         StateStore.applyDurableSnapshot(FirebaseListenerService.this,
-                                sales, root.optInt("total", sales.length()));
+                                sales, root.optInt("total", sales.length()),
+                                root.optLong("updated_at", 0L));
                         broadcastRefresh();
                     } catch (Throwable ignored) {}
                 });
@@ -604,7 +605,8 @@ public class FirebaseListenerService extends Service {
             JSONObject body = new JSONObject(o.optString("message", "{}"));
             if (StateSync.STATE_SNAPSHOT_BEGIN_TITLE.equals(title)
                     && "state_snapshot_begin_v1".equals(body.optString("type", ""))) {
-                StateStore.beginSnapshot(this, body.optString("batch_id", ""), body.optInt("total", 0));
+                StateStore.beginSnapshot(this, body.optString("batch_id", ""),
+                        body.optInt("total", 0), body.optLong("at", 0L));
             } else if (StateSync.STATE_SNAPSHOT_CHUNK_TITLE.equals(title)
                     && "state_snapshot_chunk_v1".equals(body.optString("type", ""))) {
                 JSONArray sales = body.optJSONArray("sales");
