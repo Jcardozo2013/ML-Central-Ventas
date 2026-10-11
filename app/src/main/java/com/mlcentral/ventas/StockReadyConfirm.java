@@ -29,11 +29,13 @@ public final class StockReadyConfirm {
         if (row.optBoolean("ml_stock_ready", false) || row.optBoolean("ml_label_printed", false)) return;
         String product = row.optString("product", "Producto");
         Button btn = UiKit.button(activity, "Ya tengo el producto (confirmar en ML)");
-        btn.setOnClickListener(v -> ask(activity, btn, order, shipment, product));
+        String visibleSaleId = SaleIdentifiers.visibleSaleId(row);
+        btn.setOnClickListener(v -> ask(activity, btn, order, shipment, product, visibleSaleId));
         card.addView(btn, UiKit.fullWidth(activity, 9, 0));
     }
 
-    private static void ask(Activity a, Button btn, String oid, String sid, String product) {
+    private static void ask(Activity a, Button btn, String oid, String sid,
+                            String product, String visibleSaleId) {
         JSONObject fresh = StateStore.snapshotSales(a).optJSONObject(oid);
         if (fresh == null || !"to_rocha".equals(fresh.optString("stage", "")) ||
                 !sid.equals(fresh.optString("shipment_id", ""))) {
@@ -55,8 +57,11 @@ public final class StockReadyConfirm {
         wrap.addView(digits);
         new AlertDialog.Builder(a).setTitle("Ya tengo el producto — Mercado Libre")
             .setMessage("ATENCIÓN: esto informa a Mercado Libre que YA TENÉS el producto. "
-              + "No es un estado interno.\n\n" + product + "\nOrden: " + oid +
-              "\nEnvío: " + sid + "\n\nEscribí los últimos 6 dígitos de la orden:")
+              + "No es un estado interno.\n\n" + product
+              + "\nVenta ML (etiqueta): " + visibleSaleId
+              + "\nOrden API: " + oid
+              + "\nEnvío: " + sid
+              + "\n\nEscribí los últimos 6 dígitos de la ORDEN API (no de la venta ML):")
             .setView(wrap)
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Continuar", (d,w) -> {
