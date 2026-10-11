@@ -48,7 +48,10 @@ public final class ShippingLabelShare {
                 already ? "Volver a enviar etiqueta ML" : "Compartir etiqueta ML por WhatsApp");
         share.setOnClickListener(v -> new AlertDialog.Builder(activity)
                 .setTitle("Etiqueta oficial de Mercado Libre")
-                .setMessage("Orden " + orderId + "\n\nLa PC consultará Mercado Libre y traerá "
+                .setMessage(SaleIdentifiers.primaryLabel(sale)
+                        + (SaleIdentifiers.hasDistinctPack(sale)
+                                ? "\nOrden API " + orderId : "")
+                        + "\n\nLa PC consultará Mercado Libre y traerá "
                         + "la etiqueta PDF. No se marcará 'Ya tengo el producto' "
                         + "ni se cambiará ningún estado. ¿Continuar?")
                 .setNegativeButton("Cancelar", null)
