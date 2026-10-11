@@ -23,6 +23,9 @@ public final class StateStore {
     private static final String LAST_SYNC_KEY = "state_last_sync_at_v1";
     private static final String LAST_STATUS_KEY = "state_last_status_v1";
     private static final String LAST_STATUS_AT_KEY = "state_last_status_at_v1";
+    // Tablero atómico v2: evita que fragmentos heredados lo reemplacen.
+    private static final String DURABLE_SOURCE_AT_KEY = "state_durable_updated_unix_v181";
+    private static final String DURABLE_RECEIVED_AT_KEY = "state_durable_received_at_v181";
 
     private StateStore() {}
 
@@ -51,9 +54,24 @@ public final class StateStore {
     }
 
     public static synchronized void beginSnapshot(Context c, String batchId, int total) {
+        beginSnapshot(c, batchId, total, 0L);
+    }
+
+    /** Evita comenzar un snapshot heredado que ya fue superado por state/current. */
+    public static synchronized void beginSnapshot(Context c, String batchId, int total,
+                                                  long sourceAtUnix) {
         String bid = batchId == null ? "" : batchId.trim();
         if (bid.isEmpty()) return;
         SharedPreferences p = prefs(c);
+        long latestDurable = p.getLong(DURABLE_SOURCE_AT_KEY, 0L);
+        long durableReceived = p.getLong(DURABLE_RECEIVED_AT_KEY, 0L);
+        long nowMs = System.currentTimeMillis();
+        if (sourceAtUnix > 0L && latestDurable > 0L && sourceAtUnix <= latestDurable) return;
+        // Los servidores anteriores no enviaban timestamp. Dar prioridad al
+        // tablero completo reciente sin perder el soporte para APK/PC antiguos.
+        if (sourceAtUnix <= 0L && durableReceived > 0L
+                && nowMs - durableReceived >= 0L && nowMs - durableReceived < 20L * 60L * 1000L)
+            return;
         JSONObject active = object(p.getString(ACTIVE_KEY, "{}"));
         if (bid.equals(active.optString("batch_id", ""))) return;
         JSONObject next = new JSONObject();
@@ -63,6 +81,7 @@ public final class StateStore {
             next.put("total", Math.max(0, total));
             next.put("sales", new JSONObject());
             next.put("started_at", now);
+            next.put("source_at", Math.max(0L, sourceAtUnix));
         } catch (Exception ignored) {}
         p.edit()
                 .putString(ACTIVE_KEY, next.toString())
@@ -165,17 +184,28 @@ public final class StateStore {
     }
 
     public static synchronized void applyDurableSnapshot(Context c, JSONObject sales, int total) {
+        applyDurableSnapshot(c, sales, total, 0L);
+    }
+
+    public static synchronized void applyDurableSnapshot(Context c, JSONObject sales, int total,
+                                                         long updatedAtUnix) {
         if (sales == null) return;
         SharedPreferences p = prefs(c);
         long now = System.currentTimeMillis();
         int count = sales.length();
-        p.edit()
+        long knownUpdated = p.getLong(DURABLE_SOURCE_AT_KEY, 0L);
+        // Una respuesta de red atrasada jamás debe sustituir un tablero reciente.
+        if (updatedAtUnix > 0L && knownUpdated > 0L && updatedAtUnix < knownUpdated) return;
+        SharedPreferences.Editor edit = p.edit()
                 .putString(FINAL_KEY, sales.toString())
                 .putString(ACTIVE_KEY, "")
                 .putLong(LAST_SYNC_KEY, now)
                 .putString(LAST_STATUS_KEY, "Estados sincronizados en vivo: " + count)
                 .putLong(LAST_STATUS_AT_KEY, now)
-                .apply();
+                .putLong(DURABLE_RECEIVED_AT_KEY, now);
+        if (updatedAtUnix > 0L) edit.putLong(DURABLE_SOURCE_AT_KEY,
+                Math.max(knownUpdated, updatedAtUnix));
+        edit.apply();
         HistoryRestore.backfillFromStateObject(c, sales);
         MonthlyStats.rebuildFromStateObject(c, sales);
     }
