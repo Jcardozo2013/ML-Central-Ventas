@@ -210,6 +210,17 @@ public final class StateStore {
         MonthlyStats.rebuildFromStateObject(c, sales);
     }
 
+    /**
+     * Detecta un lote heredado a medio recibir que no debe ocultar state/current.
+     * Sólo se recupera desde un tablero completo obtenido por HTTPS en vivo.
+     */
+    public static synchronized boolean hasUnfinishedLegacySnapshot(Context c) {
+        JSONObject active = object(prefs(c).getString(ACTIVE_KEY, "{}"));
+        if (active.optString("batch_id", "").trim().isEmpty()) return false;
+        long startedAt = active.optLong("started_at", 0L);
+        return startedAt > 0L && System.currentTimeMillis() - startedAt > 20_000L;
+    }
+
     /** Copia del tablero de ventas vigentes, sin ordenar para cálculos. */
     public static synchronized JSONObject snapshotSales(Context c) {
         return object(prefs(c).getString(FINAL_KEY, "{}"));
