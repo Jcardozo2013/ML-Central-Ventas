@@ -291,9 +291,14 @@ public class StatusActivity extends Activity {
         product.setPadding(0, UiKit.dp(this, 10), 0, UiKit.dp(this, 7));
         card.addView(product);
 
-        StringBuilder info = new StringBuilder("Orden ").append(orderId);
+        // Coincidir con el número grande impreso en la etiqueta interna:
+        // pack_id (Venta ML) antes que order_id (Orden API).
+        // orderId sigue siendo la clave técnica de acciones y sincronización.
+        StringBuilder info = new StringBuilder(SaleIdentifiers.primaryLabel(row));
         int qty = Math.max(1, row.optInt("quantity", 1));
         info.append(" · ").append(qty).append(qty == 1 ? " unidad" : " unidades");
+        String technical = SaleIdentifiers.technicalLabel(row);
+        if (!technical.isEmpty()) info.append("\n").append(technical);
         if (row.has("sale_amount") && !row.isNull("sale_amount")) info.append("\nVenta: ").append(SaleStore.formatMoney(row.optDouble("sale_amount", 0.0)));
         if (row.has("profit") && !row.isNull("profit")) info.append(" · Ganancia: ").append(SaleStore.formatMoney(row.optDouble("profit", 0.0)));
         if (row.has("br_price_unit") && !row.isNull("br_price_unit")) {
@@ -369,7 +374,9 @@ public class StatusActivity extends Activity {
                 : "";
         new AlertDialog.Builder(this)
                 .setTitle(label)
-                .setMessage(product + "\nOrden " + oid + extra)
+                .setMessage(product + "\n" + SaleIdentifiers.primaryLabel(row)
+                        + (SaleIdentifiers.hasDistinctPack(row) ? "\nOrden API " + oid : "")
+                        + extra)
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Confirmar", (d, w) -> {
                     StateSync.queueAction(this, oid, action, stage);
