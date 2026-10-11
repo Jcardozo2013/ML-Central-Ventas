@@ -46,10 +46,12 @@ public final class LabelScanActivity extends Activity {
     private static final int MAX_BATCH = 100;
 
     private static final class Item {
-        final String orderId, product, stage, action, before, after;
-        Item(String orderId, String product, String stage,
-             String action, String before, String after) {
+        final String orderId, primaryLabel, technicalLabel, product, stage, action, before, after;
+        Item(String orderId, String primaryLabel, String technicalLabel,
+             String product, String stage, String action, String before, String after) {
             this.orderId = orderId;
+            this.primaryLabel = primaryLabel;
+            this.technicalLabel = technicalLabel;
             this.product = product;
             this.stage = stage;
             this.action = action;
@@ -293,6 +295,7 @@ public final class LabelScanActivity extends Activity {
             return;
         }
         selected.put(order, new Item(order,
+                SaleIdentifiers.primaryLabel(row), SaleIdentifiers.technicalLabel(row),
                 row.optString("product", "Producto"), stage, action, before, after));
         updateCounter();
         scanNotice.setText("✓ " + row.optString("product", "Producto")
@@ -336,8 +339,9 @@ public final class LabelScanActivity extends Activity {
             LinearLayout info = new LinearLayout(this);
             info.setOrientation(LinearLayout.VERTICAL);
             info.addView(UiKit.text(this, item.product, 16, UiKit.TEXT, true));
-            info.addView(UiKit.text(this, "Orden " + item.orderId, 12, UiKit.MUTED, false),
-                    UiKit.fullWidth(this, 4, 5));
+            info.addView(UiKit.text(this, item.primaryLabel
+                            + (item.technicalLabel.isEmpty() ? "" : "\n" + item.technicalLabel),
+                    12, UiKit.MUTED, false), UiKit.fullWidth(this, 4, 5));
             info.addView(UiKit.text(this, item.before + "  →  " + item.after,
                     13, UiKit.ACCENT, true));
             line.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
