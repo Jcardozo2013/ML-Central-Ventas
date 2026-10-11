@@ -163,14 +163,17 @@ public final class DailyWorkActivity extends Activity {
             for (int k=0;k<limit;k++) {
                 JSONObject row = rows.get(k);
                 String name = row.optString("product", "Producto");
-                String order = row.optString("order_id", "");
+                String saleId = SaleIdentifiers.primaryLabel(row);
+                String technicalId = SaleIdentifiers.technicalLabel(row);
                 int qty = Math.max(1, row.optInt("quantity", 1));
                 LinearLayout item = new LinearLayout(this);
                 item.setOrientation(LinearLayout.VERTICAL);
                 item.setPadding(0, UiKit.dp(this, 7), 0, UiKit.dp(this, 6));
                 item.addView(UiKit.text(this, name, 14, UiKit.TEXT, true));
-                item.addView(UiKit.text(this, "Orden " + order + " · " + qty
-                        + (qty == 1 ? " unidad" : " unidades"), 12, UiKit.MUTED, false));
+                item.addView(UiKit.text(this, saleId + " · " + qty
+                        + (qty == 1 ? " unidad" : " unidades")
+                        + (technicalId.isEmpty() ? "" : "\n" + technicalId),
+                        12, UiKit.MUTED, false));
                 if (groupIndex == 0) {
                     // Pedido pendiente de compra: acceso directo al proveedor BR.
                     PurchaseLinks.addToCard(this, item, row, true);
