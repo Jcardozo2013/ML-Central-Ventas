@@ -69,6 +69,9 @@ public final class FirebaseUsageMonitor {
         long updated = Math.max(0L, o.optLong("updated_at", 0L));
         long cleanup = Math.max(0L, o.optLong("last_cleanup_unix", 0L));
         boolean complete = o.optBoolean("measurement_complete", true);
+        boolean cleanupOk = o.optBoolean("cleanup_ok", true);
+        String cleanupError = o.optString("cleanup_error", "").trim();
+        if (cleanupError.length() > 180) cleanupError = cleanupError.substring(0, 180);
 
         p.edit()
                 .putLong("firebase_usage_estimated_bytes_v166", estimated)
@@ -80,6 +83,8 @@ public final class FirebaseUsageMonitor {
                 .putLong("firebase_usage_updated_unix_v166", updated)
                 .putLong("firebase_usage_cleanup_unix_v166", cleanup)
                 .putBoolean("firebase_usage_complete_v166", complete)
+                .putBoolean("firebase_usage_cleanup_ok_v181", cleanupOk)
+                .putString("firebase_usage_cleanup_error_v181", cleanupError)
                 .putString("firebase_usage_error_v166", "")
                 .apply();
 
@@ -132,12 +137,21 @@ public final class FirebaseUsageMonitor {
         SharedPreferences p = prefs(context);
         long cleanup = p.getLong("firebase_usage_cleanup_unix_v166", 0L);
         long updated = p.getLong("firebase_usage_updated_unix_v166", 0L);
-        if (cleanup <= 0L) {
-            if (updated <= 0L) return "Windows todavía no publicó el estado de almacenamiento.";
-            return "Medición: " + formatTime(updated) + " · esperando dato de limpieza.";
+        if (updated <= 0L) return "Windows todavía no publicó el estado de almacenamiento.";
+        StringBuilder message = new StringBuilder("Informe PC: ").append(formatTime(updated));
+        if (cleanup > 0L) message.append(" · Última limpieza: ").append(formatTime(cleanup));
+        else message.append(" · sin limpieza confirmada");
+        String cleanupError = p.getString("firebase_usage_cleanup_error_v181", "");
+        if (!p.getBoolean("firebase_usage_cleanup_ok_v181", true) && cleanupError != null
+                && !cleanupError.trim().isEmpty()) {
+            message.append("\n⚠ Limpieza pendiente: ").append(cleanupError.trim());
         }
-        return "Última limpieza: " + formatTime(cleanup)
-                + (stale(context) ? " · ⚠ monitor atrasado" : " · monitor automático activo");
+        if (stale(context)) {
+            message.append("\n⚠ Informe atrasado (>2 horas). Verificá ML Central Windows.");
+        } else if (p.getBoolean("firebase_usage_cleanup_ok_v181", true)) {
+            message.append(" · monitor actualizado");
+        }
+        return message.toString();
     }
 
     private static String formatTime(long unixSeconds) {
