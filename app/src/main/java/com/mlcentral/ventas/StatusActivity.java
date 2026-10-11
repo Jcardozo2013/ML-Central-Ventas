@@ -13,7 +13,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -48,7 +47,6 @@ public class StatusActivity extends Activity {
     private LinearLayout cards;
     private LinearLayout list;
     private TextView syncStatus;
-    private TextView commandResult;
     private TextView listTitle;
     private String filter = "all";
     private int visibleLimit = PAGE_SIZE;
@@ -89,10 +87,6 @@ public class StatusActivity extends Activity {
         LinearLayout statusCard = UiKit.card(this);
         syncStatus = UiKit.text(this, "Estados PC: esperando sincronización…", 14, UiKit.TEXT, true);
         statusCard.addView(syncStatus);
-        commandResult = UiKit.text(this, "", 13, UiKit.MUTED, true);
-        commandResult.setPadding(0, UiKit.dp(this, 7), 0, 0);
-        commandResult.setVisibility(View.GONE);
-        statusCard.addView(commandResult);
         TextView note = UiKit.text(this,
                 "La PC es la fuente central. Si está apagada, los cambios quedan pendientes y se envían cuando vuelva.",
                 13, UiKit.MUTED, false);
@@ -170,16 +164,6 @@ public class StatusActivity extends Activity {
         int pending = pendingOrders.size();
         if (pending > 0) text += " · " + pending + (pending == 1 ? " cambio pendiente" : " cambios pendientes");
         syncStatus.setText(text);
-        SharedPreferences p = getSharedPreferences(AppConfig.PREFS, MODE_PRIVATE);
-        String result = p.getString("state_last_command_result_v179", "");
-        long at = p.getLong("state_last_command_result_at_v179", 0L);
-        if (!result.isEmpty() && at > 0L && System.currentTimeMillis() - at < 24L * 3600000L) {
-            commandResult.setText("Último cambio: " + result);
-            commandResult.setTextColor(result.startsWith("PC rechazó") ? UiKit.RED : UiKit.GREEN);
-            commandResult.setVisibility(View.VISIBLE);
-        } else {
-            commandResult.setVisibility(View.GONE);
-        }
     }
 
     private Set<String> readPendingOrderIds() {
@@ -291,9 +275,8 @@ public class StatusActivity extends Activity {
         product.setPadding(0, UiKit.dp(this, 10), 0, UiKit.dp(this, 7));
         card.addView(product);
 
-        // Coincidir con el número grande impreso en la etiqueta interna:
-        // pack_id (Venta ML) antes que order_id (Orden API).
-        // orderId sigue siendo la clave técnica de acciones y sincronización.
+        // El número visible coincide con el de la etiqueta impresa.
+        // Los cambios de estado continúan usando orderId (Orden API).
         StringBuilder info = new StringBuilder(SaleIdentifiers.primaryLabel(row));
         int qty = Math.max(1, row.optInt("quantity", 1));
         info.append(" · ").append(qty).append(qty == 1 ? " unidad" : " unidades");
