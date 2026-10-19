@@ -134,6 +134,7 @@ public final class StateStore {
                     .apply();
             return false;
         }
+        JSONObject previousSales = object(p.getString(FINAL_KEY, "{}"));
         p.edit()
                 .putString(FINAL_KEY, sales.toString())
                 .putString(ACTIVE_KEY, "")
@@ -141,6 +142,7 @@ public final class StateStore {
                 .putString(LAST_STATUS_KEY, "Estados sincronizados: " + received)
                 .putLong(LAST_STATUS_AT_KEY, now)
                 .apply();
+        DispatchNotificationTracker.reportTransitions(c, previousSales, sales);
 
         // Estados es la fuente autoritativa de ventas válidas. Si una orden
         // llegó aquí pero faltó su mensaje de historial (caso STOCK LOCAL),
@@ -158,6 +160,7 @@ public final class StateStore {
         if (oid.isEmpty()) return;
         SharedPreferences p = prefs(c);
         JSONObject all = object(p.getString(FINAL_KEY, "{}"));
+        JSONObject previousSale = all.optJSONObject(oid);
         try { all.put(oid, state); } catch (Exception ignored) {}
 
         // v1.54: si justo estaba entrando un snapshot completo, actualizar también
@@ -180,6 +183,7 @@ public final class StateStore {
                 .putLong(LAST_SYNC_KEY, now);
         if (activeChanged) e.putString(ACTIVE_KEY, active.toString());
         e.apply();
+        DispatchNotificationTracker.reportTransition(c, previousSale, state);
         MonthlyStats.rebuildFromStateObject(c, all);
     }
 
@@ -196,6 +200,7 @@ public final class StateStore {
         long knownUpdated = p.getLong(DURABLE_SOURCE_AT_KEY, 0L);
         // Una respuesta de red atrasada jamás debe sustituir un tablero reciente.
         if (updatedAtUnix > 0L && knownUpdated > 0L && updatedAtUnix < knownUpdated) return;
+        JSONObject previousSales = object(p.getString(FINAL_KEY, "{}"));
         SharedPreferences.Editor edit = p.edit()
                 .putString(FINAL_KEY, sales.toString())
                 .putString(ACTIVE_KEY, "")
@@ -206,6 +211,7 @@ public final class StateStore {
         if (updatedAtUnix > 0L) edit.putLong(DURABLE_SOURCE_AT_KEY,
                 Math.max(knownUpdated, updatedAtUnix));
         edit.apply();
+        DispatchNotificationTracker.reportTransitions(c, previousSales, sales);
         HistoryRestore.backfillFromStateObject(c, sales);
         MonthlyStats.rebuildFromStateObject(c, sales);
     }

@@ -118,6 +118,22 @@ public class SettingsActivity extends Activity {
         deliveries.addView(toneDelivery, UiKit.fullWidth(this, 8, 0));
         root.addView(deliveries, UiKit.fullWidth(this, 7, 18));
 
+        root.addView(sectionTitle("ENVIADOS"));
+        LinearLayout dispatched = UiKit.card(this);
+        dispatched.addView(UiKit.text(this,
+                "Aviso cuando una venta pasa de A ROCHA a ENVIADOS. Elegí un sonido independiente.",
+                14, UiKit.MUTED, false));
+        Button testDispatched = UiKit.button(this, "Probar aviso de enviados");
+        testDispatched.setOnClickListener(v -> showDispatchedTest());
+        dispatched.addView(testDispatched, UiKit.fullWidth(this, 12, 0));
+        Button toneDispatched = UiKit.button(this, "Elegir sonido de enviados");
+        toneDispatched.setOnClickListener(v -> {
+            DispatchNotificationTracker.ensureChannel(this);
+            openChannelSettings(DispatchNotificationTracker.CHANNEL_ID);
+        });
+        dispatched.addView(toneDispatched, UiKit.fullWidth(this, 8, 0));
+        root.addView(dispatched, UiKit.fullWidth(this, 7, 18));
+
         root.addView(sectionTitle("DIAGNÓSTICO"));
         LinearLayout diagnostics = UiKit.card(this);
         TextView diagnosticsText = UiKit.text(this,
@@ -281,6 +297,18 @@ public class SettingsActivity extends Activity {
                 .setAutoCancel(true);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_MAX).setDefaults(Notification.DEFAULT_ALL);
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(999, b.build());
+    }
+
+    private void showDispatchedTest() {
+        DispatchNotificationTracker.ensureChannel(this);
+        Notification.Builder b = testBuilder(DispatchNotificationTracker.CHANNEL_ID);
+        b.setSmallIcon(android.R.drawable.stat_sys_upload_done)
+                .setContentTitle("PRUEBA · A ROCHA → ENVIADOS")
+                .setContentText("Prueba del sonido elegido para enviados.")
+                .setStyle(new Notification.BigTextStyle().bigText("Orden de prueba\nEstado anterior: A ROCHA\nEstado actual: ENVIADOS\nEste es el canal de ENVIADOS."))
+                .setAutoCancel(true);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) b.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL);
+        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(997, b.build());
     }
 
     private void showDeliveryTest() {
