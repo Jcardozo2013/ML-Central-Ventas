@@ -1,0 +1,43 @@
+name: Exportar fuentes exactas APK v1.81
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obtener fuentes exactas de la APK verificada v1.81
+        uses: actions/checkout@v4
+        with:
+          ref: 2c0927413165f165c3017c131b9ab598c0fccdf2
+      - name: Empaquetar sólo código de Android y archivos de compilación
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "versionName '1.81'" app/build.gradle
+          grep -q "versionCode 82" app/build.gradle
+          python3 - <<'PY'
+          import subprocess, zipfile, pathlib
+          out = pathlib.Path('ML-Central-Ventas-v1.81_FUENTES.zip')
+          tracked = subprocess.check_output(['git','ls-files','-z']).split(b'\0')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for raw in tracked:
+                  if not raw: continue
+                  name = raw.decode('utf-8')
+                  p = pathlib.Path(name)
+                  if not p.is_file(): continue
+                  z.write(p, arcname='ML-Central-Ventas-v1.81_CODIGO/'+name)
+          print('Fuente ZIP creada:', out, 'bytes:', out.stat().st_size)
+          PY
+      - name: Guardar fuentes para entregar
+        uses: actions/upload-artifact@v4
+        with:
+          name: ML-Central-Ventas-v1.81_FUENTES
+          path: ML-Central-Ventas-v1.81_FUENTES.zip
+          retention-days: 7
