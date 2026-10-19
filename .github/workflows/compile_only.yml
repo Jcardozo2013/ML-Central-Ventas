@@ -23,5 +23,23 @@ jobs:
             -storepass android -keypass android -alias androiddebugkey \
             -keyalg RSA -keysize 2048 -validity 1 \
             -dname "CN=TEMPORARY CI ONLY, O=ML Central"
+      - name: Generar sonido de venta necesario para compilar
+        shell: bash
+        run: |
+          mkdir -p app/src/main/res/raw
+          python3 - <<'PY2'
+          import wave, math, struct
+          rate = 44100
+          duration = 0.65
+          with wave.open("app/src/main/res/raw/sale_chime.wav", "w") as f:
+              f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
+              data = []
+              for i in range(int(rate * duration)):
+                  t = i / rate
+                  freq = 880 if t < 0.22 else 1320
+                  envelope = max(0.0, 1.0 - t / duration)
+                  data.append(struct.pack("<h", int(15000 * math.sin(2 * math.pi * freq * t) * envelope)))
+              f.writeframes(b"".join(data))
+          PY2
       - name: Compilar APK sin publicar
         run: gradle clean assembleDebug --stacktrace
