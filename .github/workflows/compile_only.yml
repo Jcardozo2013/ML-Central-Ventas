@@ -1,0 +1,27 @@
+name: Verificar compilación Android sin publicar APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  compile_only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Clave temporal SOLO para comprobar compilación (no se entrega)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 1 \
+            -dname "CN=TEMPORARY CI ONLY, O=ML Central"
+      - name: Compilar APK sin publicar
+        run: gradle clean assembleDebug --stacktrace
