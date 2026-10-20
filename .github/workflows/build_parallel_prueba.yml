@@ -1,4 +1,4 @@
-name: ML Central PRUEBA paralela v1.83
+name: ML Central Ventas v1.84 (actualización app paralela)
 on:
   push:
     branches: [prueba-paralela-v182]
@@ -84,9 +84,9 @@ jobs:
                   data.append(struct.pack("<h", int(15000 * math.sin(2 * math.pi * freq * t) * envelope)))
               f.writeframes(b"".join(data))
           PY2
-      - name: Compilar APK PRUEBA
+      - name: Compilar ML Central Ventas
         run: gradle clean assembleDebug --stacktrace
-      - name: Verificar que no reemplaza a la original
+      - name: Verificar identidad, versión y firma previas
         shell: bash
         run: |
           set -euo pipefail
@@ -95,24 +95,24 @@ jobs:
           BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK" | head -1)"
           echo "$BADGING"
           echo "$BADGING" | grep -q "package: name='com.mlcentral.ventas.prueba'"
-          echo "$BADGING" | grep -q "versionName='1.83-prueba'"
+          echo "$BADGING" | grep -q "versionName='1.84'"
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > firma_prueba.txt
           grep -qi "b623886a56358e91577f759afa8d86d5c6387fa9c4213679585542eb3eaa4cff" firma_prueba.txt || { echo "Firma distinta: no publicar"; exit 1; }
-          cp "$APK" ML-Central-Ventas-PRUEBA-v1.83.apk
+          cp "$APK" ML-Central-Ventas-v1.84.apk
           printf '%s\n' \
-            "PRUEBA PARALELA. No sustituye a ML Central Ventas v1.81." \
+            "ML Central Ventas v1.84. Instala encima de v1.83 PRUEBA sin perder sus datos." \
             "Ingresar a Firebase con el mismo usuario autorizado de la app original." \
             "Estados e historial se reciben del mismo ML Central Windows/Firebase." \
             "Datos exclusivamente locales de la app original NO se transfieren." \
             "Acciones realizadas en esta prueba son REALES." \
-            "Pueden recibirse dos notificaciones si ambas aplicaciones estan activas." \
+            "IMPORTANTE: paquete interno distinto. La vieja v1.81 original no es sustituida." \
             > IMPORTANTE_LEER.txt
-      - name: Guardar APK de prueba
+      - name: Guardar APK actualizada
         uses: actions/upload-artifact@v4
         with:
-          name: ML-Central-Ventas-PRUEBA-v1.83-APK
+          name: ML-Central-Ventas-v1.84-APK
           retention-days: 30
           path: |
-            ML-Central-Ventas-PRUEBA-v1.83.apk
+            ML-Central-Ventas-v1.84.apk
             firma_prueba.txt
             IMPORTANTE_LEER.txt

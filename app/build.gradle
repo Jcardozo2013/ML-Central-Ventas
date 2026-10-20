@@ -23,8 +23,8 @@ android {
         applicationId 'com.mlcentral.ventas.prueba'
         minSdk 26
         targetSdk 33
-        versionCode 84
-        versionName '1.83-prueba'
+        versionCode 85
+        versionName '1.84'
     }
 
     buildTypes {
