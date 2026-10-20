@@ -20,11 +20,11 @@ android {
     }
 
     defaultConfig {
-        applicationId 'com.mlcentral.ventas'
+        applicationId 'com.mlcentral.ventas.prueba'
         minSdk 26
         targetSdk 33
         versionCode 83
-        versionName '1.82'
+        versionName '1.82-prueba'
     }
 
     buildTypes {

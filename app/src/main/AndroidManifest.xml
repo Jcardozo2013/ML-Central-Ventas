@@ -15,7 +15,7 @@
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
-        android:label="ML Central Ventas"
+        android:label="ML Central PRUEBA"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 
