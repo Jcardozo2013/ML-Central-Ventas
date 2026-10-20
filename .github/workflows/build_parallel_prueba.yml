@@ -1,4 +1,4 @@
-name: ML Central PRUEBA paralela v1.82
+name: ML Central PRUEBA paralela v1.83
 on:
   push:
     branches: [prueba-paralela-v182]
@@ -95,9 +95,10 @@ jobs:
           BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK" | head -1)"
           echo "$BADGING"
           echo "$BADGING" | grep -q "package: name='com.mlcentral.ventas.prueba'"
-          echo "$BADGING" | grep -q "versionName='1.82-prueba'"
+          echo "$BADGING" | grep -q "versionName='1.83-prueba'"
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > firma_prueba.txt
-          cp "$APK" ML-Central-Ventas-PRUEBA-v1.82.apk
+          grep -qi "b623886a56358e91577f759afa8d86d5c6387fa9c4213679585542eb3eaa4cff" firma_prueba.txt || { echo "Firma distinta: no publicar"; exit 1; }
+          cp "$APK" ML-Central-Ventas-PRUEBA-v1.83.apk
           printf '%s\n' \
             "PRUEBA PARALELA. No sustituye a ML Central Ventas v1.81." \
             "Ingresar a Firebase con el mismo usuario autorizado de la app original." \
@@ -109,9 +110,9 @@ jobs:
       - name: Guardar APK de prueba
         uses: actions/upload-artifact@v4
         with:
-          name: ML-Central-Ventas-PRUEBA-v1.82-APK
+          name: ML-Central-Ventas-PRUEBA-v1.83-APK
           retention-days: 30
           path: |
-            ML-Central-Ventas-PRUEBA-v1.82.apk
+            ML-Central-Ventas-PRUEBA-v1.83.apk
             firma_prueba.txt
             IMPORTANTE_LEER.txt

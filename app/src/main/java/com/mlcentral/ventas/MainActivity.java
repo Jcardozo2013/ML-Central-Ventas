@@ -26,6 +26,16 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
 import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
@@ -45,6 +55,8 @@ public class MainActivity extends Activity {
     private Button unread;
     private TextView todaySales;
     private TextView todayProfit;
+    private TextView deliveredToday;
+    private String deliveredTodayDetails = "Todavía no hay entregas verificadas hoy.";
     private TextView monthSold;
     private TextView monthProfit;
     private TextView paceTitle;
@@ -348,6 +360,20 @@ public class MainActivity extends Activity {
         row.addView(profitCard, second);
         root.addView(row);
 
+        // v1.83: contador independiente del total histórico "Entregadas".
+        LinearLayout todayDeliveredCard = metricCard("ENTREGADAS HOY");
+        deliveredToday = metricValue("0");
+        todayDeliveredCard.addView(deliveredToday);
+        TextView todayDeliveredNote = UiKit.text(this,
+                "Tocá para ver las entregas del día.", 12, UiKit.MUTED, false);
+        todayDeliveredNote.setPadding(0, UiKit.dp(this, 5), 0, 0);
+        todayDeliveredCard.addView(todayDeliveredNote);
+        todayDeliveredCard.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("Entregadas hoy")
+                .setMessage(deliveredTodayDetails)
+                .setPositiveButton("Cerrar", null).show());
+        root.addView(todayDeliveredCard, UiKit.fullWidth(this, 10, 0));
+
         LinearLayout monthRow = new LinearLayout(this);
         monthRow.setOrientation(LinearLayout.HORIZONTAL);
 
@@ -642,6 +668,79 @@ public class MainActivity extends Activity {
         return n == 1 ? "\n1 pendiente" : "\n" + n + " pendientes";
     }
 
+
+    private static final class DeliveredTodaySummary {
+        int count;
+        String details = "Todavía no hay entregas verificadas hoy.";
+    }
+
+    /** Fecha efectiva entregada por Mercado Libre desde Windows v21.72.
+     *  No inferir entrega por sale_unix ni updated_at de la venta.
+     */
+    private static long deliverySeconds(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return 0L;
+        String s = raw.trim().replace(' ', 'T');
+        try { return OffsetDateTime.parse(s).toEpochSecond(); }
+        catch (Exception ignored) {}
+        try { return Instant.parse(s).getEpochSecond(); }
+        catch (Exception ignored) {}
+        try { return LocalDateTime.parse(s).atZone(ZoneId.systemDefault()).toEpochSecond(); }
+        catch (Exception ignored) {}
+        try {
+            if (s.length() >= 19)
+                return LocalDateTime.parse(s.substring(0, 19))
+                    .atZone(ZoneId.systemDefault()).toEpochSecond();
+        } catch (Exception ignored) {}
+        try {
+            if (s.length() >= 10)
+                return LocalDate.parse(s.substring(0, 10))
+                    .atStartOfDay(ZoneId.systemDefault()).toEpochSecond();
+        } catch (Exception ignored) {}
+        return 0L;
+    }
+
+    private DeliveredTodaySummary calculateDeliveredToday() {
+        DeliveredTodaySummary result = new DeliveredTodaySummary();
+        JSONObject all = StateStore.snapshotSales(this);
+        JSONArray names = all.names();
+        List<String> details = new ArrayList<>();
+        boolean hasAuthoritativeDates = false;
+        if (names != null) for (int i = 0; i < names.length(); i++) {
+            String id = names.optString(i, "");
+            JSONObject row = all.optJSONObject(id);
+            if (row == null || !"delivered".equals(row.optString("stage", ""))) continue;
+            long when = deliverySeconds(row.optString("delivered_at", ""));
+            if (when <= 0L) continue;
+            hasAuthoritativeDates = true;
+            if (!Instant.ofEpochSecond(when).atZone(ZoneId.systemDefault())
+                    .toLocalDate().equals(LocalDate.now(ZoneId.systemDefault()))) continue;
+            String product = row.optString("product", "Producto").trim();
+            if (product.isEmpty()) product = "Producto";
+            String order = row.optString("order_id", id).trim();
+            String shipment = row.optString("shipment_id", "").trim();
+            String time = new SimpleDateFormat("HH:mm", Locale.getDefault())
+                    .format(new Date(when * 1000L));
+            String message = time + " · " + product
+                    + (order.isEmpty() ? "" : "\nOrden: " + order)
+                    + (shipment.isEmpty() ? "" : "\nEnvío: " + shipment);
+            details.add(message);
+        }
+        if (hasAuthoritativeDates) {
+            result.count = details.size();
+            result.details = details.isEmpty()
+                    ? "No hay entregas con fecha de hoy registradas por Windows/Mercado Libre."
+                    : String.join("\n\n───────────────\n\n", details);
+            return result;
+        }
+        // Si Windows todavía no publicó la fecha, mostrar únicamente eventos
+        // de entrega recibidos directamente; jamás atribuir una venta antigua a hoy.
+        result.count = DeliveryStore.todayCount(this);
+        String text = DeliveryStore.todayText(this);
+        result.details = result.count > 0 ? text
+                : "Todavía no hay entregas de hoy confirmadas en este celular. Para recuperar todas las entregas anteriores del día, actualizá Windows a v21.72 y sincronizá.";
+        return result;
+    }
+
     private static final class DashboardSnapshot {
         int unread;
         boolean signed;
@@ -661,6 +760,7 @@ public class MainActivity extends Activity {
         MonthlyStats.Stats monthly;
         MonthPaceStats.Pace pace;
         String todayHistory;
+        DeliveredTodaySummary deliveredToday;
     }
 
     private DashboardSnapshot collectDashboardSnapshot() {
@@ -704,6 +804,7 @@ public class MainActivity extends Activity {
         d.monthly = MonthlyStats.get(this,
                 nowMonth.get(Calendar.YEAR), nowMonth.get(Calendar.MONTH));
         d.pace = MonthPaceStats.calculate(this);
+        d.deliveredToday = calculateDeliveredToday();
         // El contador y la lista del Inicio comparten la misma fuente válida.
         // No filtrar el Historial completo: ahí se conservan las canceladas.
         d.todayHistory = StateStore.lastSyncAt(this) > 0L
@@ -813,6 +914,10 @@ public class MainActivity extends Activity {
         StateStore.Summary summary = d.stateSummary == null
                 ? new StateStore.Summary() : d.stateSummary;
         todaySales.setText(String.valueOf(summary.todaySales));
+        DeliveredTodaySummary today = d.deliveredToday;
+        deliveredToday.setText(String.valueOf(today == null ? 0 : today.count));
+        deliveredTodayDetails = today == null
+                ? "Esperando sincronización…" : today.details;
         todayProfit.setText(SaleStore.formatMoney(summary.todayProfit)
                 + pendingSuffix(summary.todayPendingProfit));
 
