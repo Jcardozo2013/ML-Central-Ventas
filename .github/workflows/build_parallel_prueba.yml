@@ -1,0 +1,117 @@
+name: ML Central PRUEBA paralela v1.82
+on:
+  push:
+    branches: [prueba-paralela-v182]
+  workflow_dispatch:
+jobs:
+  compile_only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Recuperar firma exclusiva de esta prueba
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: mlcentral-paralela-v182-signing-v1
+      - name: Crear firma propia de prueba (no la original)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -s "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 12000 \
+            -dname "CN=ML Central Ventas PRUEBA, O=ML Central"
+          fi
+      - name: Recuperar canal privado existente
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TOPIC=""
+          PINNED_ARTIFACT_ID="11714319001"
+          if curl -fsSL -L \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PINNED_ARTIFACT_ID}/zip" \
+            -o previous-topic.zip; then
+            TOPIC="$(unzip -p previous-topic.zip mlcentral_topic.txt 2>/dev/null | tr -d '\r\n' || true)"
+          fi
+          if [ -z "$TOPIC" ]; then
+            ARTIFACT_ID="$(curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=ML-Central-Ventas-APK&per_page=100" \
+              | python3 -c 'import json,sys; a=[x for x in json.load(sys.stdin).get("artifacts",[]) if not x.get("expired")]; print(a[0]["id"] if a else "")')"
+            if [ -n "$ARTIFACT_ID" ] && curl -fsSL -L \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+              -o previous-topic.zip; then
+              TOPIC="$(unzip -p previous-topic.zip mlcentral_topic.txt 2>/dev/null | tr -d '\r\n' || true)"
+            fi
+          fi
+          if [ -z "$TOPIC" ]; then
+            echo "ERROR: no se pudo recuperar el canal privado existente."
+            exit 1
+          fi
+          printf '%s\n' "$TOPIC" > mlcentral_topic.txt
+          sed -i "s/__MLC_TOPIC__/$TOPIC/g" app/src/main/java/com/mlcentral/ventas/AppConfig.java
+
+      - name: Generar sonido de venta necesario para compilar
+        shell: bash
+        run: |
+          mkdir -p app/src/main/res/raw
+          python3 - <<'PY2'
+          import wave, math, struct
+          rate = 44100
+          duration = 0.65
+          with wave.open("app/src/main/res/raw/sale_chime.wav", "w") as f:
+              f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
+              data = []
+              for i in range(int(rate * duration)):
+                  t = i / rate
+                  freq = 880 if t < 0.22 else 1320
+                  envelope = max(0.0, 1.0 - t / duration)
+                  data.append(struct.pack("<h", int(15000 * math.sin(2 * math.pi * freq * t) * envelope)))
+              f.writeframes(b"".join(data))
+          PY2
+      - name: Compilar APK PRUEBA
+        run: gradle clean assembleDebug --stacktrace
+      - name: Verificar que no reemplaza a la original
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          BUILD_TOOLS="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK" | head -1)"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "package: name='com.mlcentral.ventas.prueba'"
+          echo "$BADGING" | grep -q "versionName='1.82-prueba'"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > firma_prueba.txt
+          cp "$APK" ML-Central-Ventas-PRUEBA-v1.82.apk
+          printf '%s\n' \
+            "PRUEBA PARALELA. No sustituye a ML Central Ventas v1.81." \
+            "Ingresar a Firebase con el mismo usuario autorizado de la app original." \
+            "Estados e historial se reciben del mismo ML Central Windows/Firebase." \
+            "Datos exclusivamente locales de la app original NO se transfieren." \
+            "Acciones realizadas en esta prueba son REALES." \
+            "Pueden recibirse dos notificaciones si ambas aplicaciones estan activas." \
+            > IMPORTANTE_LEER.txt
+      - name: Guardar APK de prueba
+        uses: actions/upload-artifact@v4
+        with:
+          name: ML-Central-Ventas-PRUEBA-v1.82-APK
+          retention-days: 30
+          path: |
+            ML-Central-Ventas-PRUEBA-v1.82.apk
+            firma_prueba.txt
+            IMPORTANTE_LEER.txt
