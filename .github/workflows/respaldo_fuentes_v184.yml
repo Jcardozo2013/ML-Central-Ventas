@@ -1,0 +1,43 @@
+name: Exportar fuentes exactas ML Central Ventas v1.84
+on:
+  push:
+    branches: [prueba-paralela-v182]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exportar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obtener codigo
+        uses: actions/checkout@v4
+      - name: Verificar version y exportar fuentes completas
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "applicationId 'com.mlcentral.ventas.prueba'" app/build.gradle
+          grep -q "versionName '1.84'" app/build.gradle
+          grep -q 'versionCode 85' app/build.gradle
+          python3 - <<'PY'
+          import subprocess, pathlib, zipfile
+          out=pathlib.Path('FUENTES_EXACTAS_v1.84.zip')
+          names=subprocess.check_output(['git','ls-files','-z']).split(b'\0')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for raw in names:
+                  if not raw: continue
+                  name=raw.decode('utf-8')
+                  p=pathlib.Path(name)
+                  if p.is_file(): z.write(p, name)
+          with zipfile.ZipFile(out) as z:
+              assert z.testzip() is None
+              print('Fuente exacta: archivos',len(z.namelist()))
+          PY
+          git rev-parse HEAD > VERSION_FUENTE.txt
+      - name: Guardar fuentes
+        uses: actions/upload-artifact@v4
+        with:
+          name: ML_Central_Ventas_v1.84_FUENTES_EXACTAS
+          path: |
+            FUENTES_EXACTAS_v1.84.zip
+            VERSION_FUENTE.txt
+          retention-days: 30
