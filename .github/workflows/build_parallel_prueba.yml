@@ -1,13 +1,20 @@
-name: ML Central Ventas v1.84 (actualización app paralela)
+name: Candidata optimizada - firma comprobada por USB
 on:
-  push:
+  pull_request:
     branches: [prueba-paralela-v182]
-  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
 jobs:
   compile_only:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'auditoria/optimizada-v1.85-20261101'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -16,20 +23,28 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Recuperar firma exclusiva de esta prueba
-        uses: actions/cache@v4
+        id: signing
+        uses: actions/cache/restore@v4
         with:
           path: ~/.android/debug.keystore
           key: mlcentral-paralela-v182-signing-v1
-      - name: Crear firma propia de prueba (no la original)
+          fail-on-cache-miss: true
+      - name: Comprobar existencia de firma original de esta app paralela
         shell: bash
         run: |
           mkdir -p "$HOME/.android"
           if [ ! -s "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" \
-            -storepass android -keypass android -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 12000 \
-            -dname "CN=ML Central Ventas PRUEBA, O=ML Central"
+            echo "ERROR: falta la clave de la app paralela. No generar otra firma."
+            exit 1
           fi
+      - name: Verificar certificado antes de compilar
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.signing.outputs.cache-hit }}" = "true"
+          keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -file "$RUNNER_TEMP/mlcentral-cert.der"
+          ACTUAL="$(sha256sum "$RUNNER_TEMP/mlcentral-cert.der" | cut -d ' ' -f 1)"
+          test "$ACTUAL" = "b623886a56358e91577f759afa8d86d5c6387fa9c4213679585542eb3eaa4cff" || { echo "Firma distinta de la instalada; detener."; exit 1; }
       - name: Recuperar canal privado existente
         shell: bash
         env:
@@ -84,6 +99,13 @@ jobs:
                   data.append(struct.pack("<h", int(15000 * math.sin(2 * math.pi * freq * t) * envelope)))
               f.writeframes(b"".join(data))
           PY2
+      - name: Pruebas de paginación y límites de solicitudes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mlcentral-tests"
+          javac -d "$RUNNER_TEMP/mlcentral-tests" app/src/main/java/com/mlcentral/ventas/FirebaseReadQuery.java app/src/main/java/com/mlcentral/ventas/SnapshotRequestPolicy.java audit/FirebaseReadQueryTest.java
+          java -cp "$RUNNER_TEMP/mlcentral-tests" com.mlcentral.ventas.FirebaseReadQueryTest
       - name: Compilar ML Central Ventas
         run: gradle clean assembleDebug --stacktrace
       - name: Verificar identidad, versión y firma previas
@@ -92,27 +114,30 @@ jobs:
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           BUILD_TOOLS="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK" | head -1)"
+          BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK")"
           echo "$BADGING"
           echo "$BADGING" | grep -q "package: name='com.mlcentral.ventas.prueba'"
-          echo "$BADGING" | grep -q "versionName='1.84'"
+          echo "$BADGING" | grep -q "versionCode='86'"
+          echo "$BADGING" | grep -q "versionName='1.85'"
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > firma_prueba.txt
           grep -qi "b623886a56358e91577f759afa8d86d5c6387fa9c4213679585542eb3eaa4cff" firma_prueba.txt || { echo "Firma distinta: no publicar"; exit 1; }
-          cp "$APK" ML-Central-Ventas-v1.84.apk
+          sha256sum "$APK" > APK_SHA256.txt
+          cp "$APK" ML-Central-Ventas-v1.85-OPTIMIZADA-CANDIDATA.apk
           printf '%s\n' \
-            "ML Central Ventas v1.84. Instala encima de v1.83 PRUEBA sin perder sus datos." \
-            "Ingresar a Firebase con el mismo usuario autorizado de la app original." \
-            "Estados e historial se reciben del mismo ML Central Windows/Firebase." \
-            "Datos exclusivamente locales de la app original NO se transfieren." \
-            "Acciones realizadas en esta prueba son REALES." \
-            "IMPORTANTE: paquete interno distinto. La vieja v1.81 original no es sustituida." \
-            > IMPORTANTE_LEER.txt
+            "Candidata optimizada v1.85, paquete y certificado verificados contra el celular." \
+            "No instalada. Pendientes pruebas funcionales reales y medición productiva." \
+            "No contiene ni exporta la clave privada de firma." > IMPORTANTE_LEER.txt
       - name: Guardar APK actualizada
         uses: actions/upload-artifact@v4
         with:
-          name: ML-Central-Ventas-v1.84-APK
+          name: ML-Central-OPTIMIZADA-CANDIDATA
           retention-days: 30
           path: |
-            ML-Central-Ventas-v1.84.apk
+            ML-Central-Ventas-v1.85-OPTIMIZADA-CANDIDATA.apk
             firma_prueba.txt
+            APK_SHA256.txt
             IMPORTANTE_LEER.txt
+      - name: Quitar firma del ejecutor al terminar
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.android/debug.keystore"

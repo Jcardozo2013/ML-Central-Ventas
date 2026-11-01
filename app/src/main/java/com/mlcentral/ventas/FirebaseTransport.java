@@ -55,10 +55,17 @@ public final class FirebaseTransport {
         public final boolean ok;
         public final String detail;
         public final JSONObject data;
+        public final String etag;
+        public final boolean unchanged;
         JsonResult(boolean ok, String detail, JSONObject data) {
+            this(ok, detail, data, "", false);
+        }
+        JsonResult(boolean ok, String detail, JSONObject data, String etag, boolean unchanged) {
             this.ok = ok;
             this.detail = detail == null ? "" : detail;
             this.data = data;
+            this.etag = etag;
+            this.unchanged = unchanged;
         }
     }
 
@@ -212,6 +219,36 @@ public final class FirebaseTransport {
     }
 
     public static JsonResult readJsonRest(Context context, String path, int limitToLast) {
+        return readJsonRestAfter(context, path, limitToLast, "");
+    }
+
+    public static JsonResult readSnapshotRest(Context context, String confirmedEtag) {
+        try {
+            FirebaseConfig.ensureInitialized(context);
+            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+            if (user == null || !FirebaseConfig.EXPECTED_UID.equals(user.getUid()))
+                return new JsonResult(false, "REST: sin sesión autorizada", null);
+            for (int attempt = 0; attempt < 2; attempt++) {
+                String token = getIdToken(user, attempt > 0);
+                if (token.isEmpty()) return new JsonResult(false, "REST: sin token", null);
+                String url = FirebaseConfig.DATABASE_URL.replaceAll("/+$", "")
+                        + "/state/current.json?auth=" + URLEncoder.encode(token, StandardCharsets.UTF_8.name());
+                FirebaseSnapshotReader.Response r = FirebaseSnapshotReader.read(url, confirmedEtag);
+                if ((r.code == 401 || r.code == 403) && attempt == 0) continue;
+                if (r.unchanged) return new JsonResult(true, "REST sin cambios", null, r.etag, true);
+                if (r.code != 200) return new JsonResult(false, "REST HTTP " + r.code, null);
+                JSONObject data = "null".equals(r.body.trim()) ? new JSONObject() : new JSONObject(r.body);
+                return new JsonResult(true, "REST OK", data, r.etag, false);
+            }
+        } catch (Exception e) {
+            return new JsonResult(false, "REST " + e.getClass().getSimpleName(), null);
+        }
+        return new JsonResult(false, "REST: autenticación rechazada", null);
+    }
+
+    // Cursor inclusivo: la lógica existente descarta el evento ya aplicado.
+    // limitToFirst recupera el siguiente bloque, sin saltar una ráfaga >40.
+    public static JsonResult readJsonRestAfter(Context context, String path, int limitToLast, String cursor) {
         try {
             FirebaseConfig.ensureInitialized(context);
             FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
@@ -219,13 +256,13 @@ public final class FirebaseTransport {
             if (!FirebaseConfig.EXPECTED_UID.equals(user.getUid())) {
                 return new JsonResult(false, "REST: usuario no autorizado", null);
             }
-            return readJsonRest(user, path, limitToLast, false);
+            return readJsonRest(user, path, limitToLast, cursor, false);
         } catch (Exception e) {
             return new JsonResult(false, "REST " + e.getClass().getSimpleName() + " · " + String.valueOf(e.getMessage()), null);
         }
     }
 
-    private static JsonResult readJsonRest(FirebaseUser user, String path, int limitToLast, boolean forceRefresh) {
+    private static JsonResult readJsonRest(FirebaseUser user, String path, int limitToLast, String cursor, boolean forceRefresh) {
         String token = getIdToken(user, forceRefresh);
         if (token.isEmpty()) return new JsonResult(false, "REST: no se pudo obtener token Firebase", null);
 
@@ -238,9 +275,7 @@ public final class FirebaseTransport {
                     .append(path == null ? "" : path.replaceAll("^/+|/+$", ""))
                     .append(".json?auth=")
                     .append(URLEncoder.encode(token, StandardCharsets.UTF_8.name()));
-            if (limitToLast > 0) {
-                url.append("&orderBy=%22%24key%22&limitToLast=").append(Math.max(1, Math.min(limitToLast, 250)));
-            }
+            url.append(FirebaseReadQuery.suffix(limitToLast, cursor));
 
             conn = (HttpURLConnection) new java.net.URL(url.toString()).openConnection();
             conn.setRequestMethod("GET");
@@ -250,7 +285,7 @@ public final class FirebaseTransport {
             int code = conn.getResponseCode();
             if ((code == 401 || code == 403) && !forceRefresh) {
                 conn.disconnect();
-                return readJsonRest(user, path, limitToLast, true);
+                return readJsonRest(user, path, limitToLast, cursor, true);
             }
             if (code < 200 || code >= 300) return new JsonResult(false, "REST HTTP " + code, null);
 

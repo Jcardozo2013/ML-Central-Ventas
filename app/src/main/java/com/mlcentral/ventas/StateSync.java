@@ -22,7 +22,6 @@ public final class StateSync {
     public static final String STATE_CHANGE_RESULT_TITLE = "MLC_STATE_CHANGE_RESULT_V1";
 
     private static final String PENDING_KEY = "pending_state_commands_v1";
-    private static final long REQUEST_MIN_MS = 300000L;
     private static final int REQUEST_ATTEMPTS = 3;
     private static final long REQUEST_RETRY_MS = 1800L;
     private static volatile boolean requesting = false;
@@ -73,11 +72,12 @@ public final class StateSync {
     public static void requestSnapshotAsync(Context context, boolean force) {
         Context app = context.getApplicationContext();
         SharedPreferences p = prefs(app);
-        long now = System.currentTimeMillis();
-        long last = p.getLong("state_request_last_at_v1", 0L);
-        if (!force && last > 0 && now - last < REQUEST_MIN_MS && !StateStore.isStale(app, 5 * 60 * 1000L)) return;
         synchronized (StateSync.class) {
             if (requesting) return;
+            long now = System.currentTimeMillis();
+            long last = p.getLong("state_request_last_at_v1", 0L);
+            if (!SnapshotRequestPolicy.shouldRequest(force, now, last,
+                    StateStore.isStale(app, 5 * 60 * 1000L))) return;
             requesting = true;
         }
 
