@@ -191,15 +191,15 @@ public final class StateStore {
         applyDurableSnapshot(c, sales, total, 0L);
     }
 
-    public static synchronized void applyDurableSnapshot(Context c, JSONObject sales, int total,
+    public static synchronized boolean applyDurableSnapshot(Context c, JSONObject sales, int total,
                                                          long updatedAtUnix) {
-        if (sales == null) return;
+        if (sales == null) return false;
         SharedPreferences p = prefs(c);
         long now = System.currentTimeMillis();
         int count = sales.length();
         long knownUpdated = p.getLong(DURABLE_SOURCE_AT_KEY, 0L);
         // Una respuesta de red atrasada jamás debe sustituir un tablero reciente.
-        if (updatedAtUnix > 0L && knownUpdated > 0L && updatedAtUnix < knownUpdated) return;
+        if (updatedAtUnix > 0L && knownUpdated > 0L && updatedAtUnix < knownUpdated) return false;
         JSONObject previousSales = object(p.getString(FINAL_KEY, "{}"));
         SharedPreferences.Editor edit = p.edit()
                 .putString(FINAL_KEY, sales.toString())
@@ -214,6 +214,7 @@ public final class StateStore {
         DispatchNotificationTracker.reportTransitions(c, previousSales, sales);
         HistoryRestore.backfillFromStateObject(c, sales);
         MonthlyStats.rebuildFromStateObject(c, sales);
+        return true;
     }
 
     /**
@@ -341,6 +342,11 @@ public final class StateStore {
 
     public static long lastSyncAt(Context c) {
         return prefs(c).getLong(LAST_SYNC_KEY, 0L);
+    }
+
+    /** Sólo después de verificar la huella del snapshot ya aplicado. */
+    public static synchronized void confirmDurableSnapshotFresh(Context c) {
+        prefs(c).edit().putLong(LAST_SYNC_KEY, System.currentTimeMillis()).apply();
     }
 
     public static boolean isStale(Context c, long maxAgeMs) {
