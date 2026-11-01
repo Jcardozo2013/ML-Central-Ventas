@@ -55,6 +55,7 @@ public class FirebaseListenerService extends Service {
     private Thread stateWorker;
     private Thread heartbeatWorker;
     private Thread restFallbackWorker;
+    private String durableRestEtag = "";
     private PowerManager.WakeLock wakeLock;
     private Query mainQuery;
     private Query rsQuery;
@@ -218,10 +219,16 @@ public class FirebaseListenerService extends Service {
         restFallbackWorker.start();
     }
 
-    private void pollDurableStateRest() {
-        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "state/current", 0);
+    private synchronized void pollDurableStateRest() {
+        boolean interruptedLegacy = StateStore.hasUnfinishedLegacySnapshot(this);
+        FirebaseTransport.JsonResult result = FirebaseTransport.readSnapshotRest(this,
+                interruptedLegacy ? "" : durableRestEtag);
         if (!result.ok) return;
         markRestFallbackHealthy();
+        if (result.unchanged) {
+            StateStore.confirmDurableSnapshotFresh(this);
+            return;
+        }
         if (result.data == null || result.data.length() == 0) return;
         JSONObject root = result.data;
         JSONObject sales = root.optJSONObject("sales");
@@ -233,25 +240,18 @@ public class FirebaseListenerService extends Service {
 
         // Si quedó a medias un lote heredado, recuperar el tablero completo
         // aunque Windows no haya modificado su updated_at desde la última lectura.
-        boolean interruptedLegacy = StateStore.hasUnfinishedLegacySnapshot(this);
         // Si Windows entrega versión/fecha, ésa es la comparación principal.
-        if (updated > 0L && updated <= seenUpdated && !interruptedLegacy) {
+        if (updated > 0L && updated < seenUpdated && !interruptedLegacy) {
             p.edit().putString("firebase_rest_receive_mode_v157", "REST ACTIVO").apply();
             return;
         }
 
-        // Algunas versiones no traen updated_at. En ese caso usamos una firma
-        // liviana del JSON para no volver a escribir SharedPreferences ni hacer
-        // HistoryRestore.backfill si el tablero es idéntico.
+        // Conservar el indicador diagnóstico heredado; no usar hashCode para
+        // omitir datos. La comparación de contenido usa el ETag del servidor.
         String signature = Integer.toHexString(sales.toString().hashCode())
                 + ":" + root.optInt("total", sales.length());
-        String previousSignature = p.getString("firebase_rest_state_hash_v158", "");
-        if (updated <= 0L && signature.equals(previousSignature) && !interruptedLegacy) {
-            p.edit().putString("firebase_rest_receive_mode_v157", "REST ACTIVO").apply();
-            return;
-        }
-
-        StateStore.applyDurableSnapshot(this, sales, root.optInt("total", sales.length()), updated);
+        if (!StateStore.applyDurableSnapshot(this, sales, root.optInt("total", sales.length()), updated)) return;
+        durableRestEtag = result.etag;
         p.edit()
                 .putLong("firebase_rest_state_updated_v157",
                         updated > 0L ? updated : seenUpdated)
@@ -262,8 +262,14 @@ public class FirebaseListenerService extends Service {
         broadcastRefresh();
     }
 
+    private String restQueryCursor(String restKey, String sdkKey) {
+        String cursor = prefs().getString(restKey, "");
+        if (cursor == null || cursor.trim().isEmpty()) cursor = prefs().getString(sdkKey, "");
+        return cursor == null ? "" : cursor.trim();
+    }
+
     private void pollRsRest() {
-        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/rs", 40);
+        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRestAfter(this, "channels/rs", 40, restQueryCursor("firebase_rest_rs_cursor_v161", RS_CURSOR));
         if (!result.ok) return;
         markRestFallbackHealthy();
         if (result.data == null || result.data.length() == 0) return;
@@ -303,15 +309,18 @@ public class FirebaseListenerService extends Service {
                 msg.put("id", key);
                 if (ReadSync.isReadSync(msg)) handleReadSync(msg);
                 if (key.compareTo(newest) > 0) newest = key;
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+                // No avanzar por encima de un evento cuyo procesamiento falló.
+                break;
+            }
         }
         p.edit().putString("firebase_rest_rs_cursor_v161", newest).apply();
     }
 
     private void pollMainRest() {
-        // 40 eventos recientes alcanza para recuperar ventas perdidas y reduce
-        // mucho JSON/red/CPU frente a consultar 120 cada diez segundos.
-        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRest(this, "channels/main", 40);
+        // Leer el siguiente bloque pendiente; la recuperación secundaria de
+        // ventas recientes sigue activa para las notificaciones perdidas.
+        FirebaseTransport.JsonResult result = FirebaseTransport.readJsonRestAfter(this, "channels/main", 40, restQueryCursor("firebase_rest_main_cursor_v157", MAIN_CURSOR));
         if (!result.ok) return;
         markRestFallbackHealthy();
         if (result.data == null || result.data.length() == 0) return;
@@ -358,7 +367,10 @@ public class FirebaseListenerService extends Service {
                 if (!msg.has("event")) msg.put("event", "message");
                 handleMessage(msg);
                 if (key.compareTo(newest) > 0) newest = key;
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+                // No avanzar por encima de un evento cuyo procesamiento falló.
+                break;
+            }
         }
         p.edit()
                 .putString("firebase_rest_main_cursor_v157", newest)
